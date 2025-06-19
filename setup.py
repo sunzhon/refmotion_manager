@@ -23,7 +23,7 @@ setup(
     description="Loading reference motions",
     python_requires=">=3.10",
     install_requires=[
-         "pybullet_utils",
+         "pybullet",
          "torch"
     ],
 )
