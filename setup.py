@@ -21,7 +21,7 @@ setup(
     version="0.1.0",
     packages=find_packages(),
     description="Loading reference motions",
-    python_requires=">=3.10",
+    python_requires=">=3.8",
     install_requires=[
          "pybullet",
          "torch"
