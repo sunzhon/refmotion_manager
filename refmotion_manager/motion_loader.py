@@ -8,10 +8,9 @@ import torch
 import numpy as np
 from pybullet_utils import transformations
 
-from . import motion_util
-from .pose3d import QuaternionNormalize
+from .utils import motion_util
+from .utils.pose3d import QuaternionNormalize
 from dataclasses import MISSING
-
 
 # Configure the logging system
 import logging
@@ -22,7 +21,7 @@ logging.basicConfig(
 # Create a logger object
 logger = logging.getLogger("motion_loader")
 
-from isaaclab.utils import configclass
+from isaaclab.utils import configclass  # or any submodule you need
 
 @configclass
 class RefMotionCfg:
@@ -45,9 +44,7 @@ class RefMotionCfg:
     random_start: bool=False
     amp_obs_frame_num: int=1
     specify_init_values=None
-
-
-
+    
 class RefMotionLoader:
     def __init__(
         self, 
@@ -182,7 +179,14 @@ class RefMotionLoader:
 
 
         # Select init state and necessary fields
-        assert set(self.cfg.init_state_fields).issubset(set(self.trajectory_fields)), f"The arguments field {self.cfg.init_state_fields} should have same elements with the dataset fields {self.trajectory_fields} in {motion_file}"
+        #assert set(self.cfg.init_state_fields).issubset(set(self.trajectory_fields)), f"The arguments field {self.cfg.init_state_fields} should have same elements with the dataset fields {self.trajectory_fields} in {motion_file}"
+        missing_fields = set(self.cfg.init_state_fields) - set(self.trajectory_fields)
+        assert not missing_fields, (
+            f"The fields {self.cfg.init_state_fields} should all exist in the dataset fields "
+            f"{self.trajectory_fields} for {motion_file}. "
+            f"Missing fields: {sorted(missing_fields)}"
+        )
+
         self.init_state_fields_index = [self.trajectory_fields.index(key) for key in self.cfg.init_state_fields]
         self.base_velocity_index_w = [self.trajectory_fields.index(key) for key in ["root_vel_x_w","root_vel_y_w","root_ang_vel_z_w"]]
         self.base_velocity_index_b = [self.trajectory_fields.index(key) for key in ["root_vel_x_b","root_vel_y_b","root_ang_vel_z_b"]]
@@ -455,9 +459,6 @@ class RefMotionLoader:
         return self.preloaded_s[self.traj_idxs, self.next_frame_idx][:, self.expressive_goal_index]
 
 
-
-
-
     def reset(self, env_ids:torch.Tensor=None):
         if env_ids==None:
             self.frame_idx[:] = 0
@@ -484,47 +485,3 @@ class RefMotionLoader:
         return len(self.trajectory_names)
 
 
-if __name__ == "__main__":
-
-    # load dataset for demonstration:
-    import glob
-    from collections import OrderedDict
-    import os
-    joint_names = ['left_hip_yaw_joint', 'left_hip_roll_joint', 'left_hip_pitch_joint', 'left_knee_joint', 'left_ankle_joint', 'right_hip_yaw_joint', 'right_hip_roll_joint', 'right_hip_pitch_joint', 'right_knee_joint', 'right_ankle_joint', 'torso_joint', 'left_shoulder_pitch_joint', 'left_shoulder_roll_joint', 'left_shoulder_yaw_joint', 'left_elbow_joint', 'right_shoulder_pitch_joint', 'right_shoulder_roll_joint', 'right_shoulder_yaw_joint', 'right_elbow_joint']
-
-    key_body_names = ["left_ankle_joint","right_ankle_joint"]
-    reordered_fields= [
-            "root_pos_z",
-            "root_rot_x",
-            "root_rot_y",
-            "root_rot_z",
-            "root_rot_w",
-            "root_vel_x",
-            "root_vel_y",
-            "root_vel_z",
-            "root_ang_vel_x",
-            "root_ang_vel_y",
-            "root_ang_vel_z",
-        ] +\
-        [key + "_dof_pos" for key in joint_names] +\
-        [key + "_dof_vel" for key in joint_names] +\
-        [k1 + "_" + k2 for k1 in key_body_names for k2 in ["x", "y", "z"]]
-    
-
-    amp_data_cfg = OrderedDict(
-        time_between_frames=0.02,  # time between two frames
-        shuffle=False,
-        motion_files=glob.glob(
-            os.getenv("HOME")
-            + "/workspace/kepler_ws/KeplerRobot/datasets/motion_files/saved_h1_data.txt"
-        ),
-        style_fields=reordered_fields,
-        augment_trajectory_num=100,
-        augment_frame_num=10000,
-        device="cuda:0",
-    )
-    amp_data = AMPLoader(**amp_data_cfg)
-    amp_expert_generator = amp_data.expert_obs_generator(100, 1)
-    for _ in range(4):
-        logger.info(amp_expert_generator.__next__().shape)
-        logger.info(amp_expert_generator.__next__()[:13])
