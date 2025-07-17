@@ -467,10 +467,10 @@ class RefMotionLoader:
         max_start = self.preloaded_s.shape[1] - self.augment_frame_num - 1  # avoid -2+1 confusion
         if env_ids is None:
             self.frame_idx[:] = 0
-            self.start_idx[:] = np.random.randint(0, max_start + 1, size=self.preloaded_s.shape[0])
+            self.start_idx[:] = torch.randint(low=0, high=max_start + 1, size=(self.preloaded_s.shape[0],),device=self.start_idx.device)
         else:
             self.frame_idx[env_ids] = 0
-            self.start_idx[env_ids] = np.random.randint(0, max_start + 1, size=len(env_ids))
+            self.start_idx[env_ids] = torch.randint(low=0, high=max_start + 1, size=(len(env_ids),), device=self.start_idx.device)
 
 
     def sw_quat(self, frame_data):
