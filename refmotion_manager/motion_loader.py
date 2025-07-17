@@ -8,9 +8,10 @@ import torch
 import numpy as np
 from pybullet_utils import transformations
 
-from .utils import motion_util
-from .utils.pose3d import QuaternionNormalize
+from . import motion_util
+from .pose3d import QuaternionNormalize
 from dataclasses import MISSING
+
 
 # Configure the logging system
 import logging
@@ -21,7 +22,7 @@ logging.basicConfig(
 # Create a logger object
 logger = logging.getLogger("motion_loader")
 
-from isaaclab.utils import configclass  # or any submodule you need
+from isaaclab.utils import configclass
 
 @configclass
 class RefMotionCfg:
@@ -34,8 +35,8 @@ class RefMotionCfg:
     style_goal_fields: list= None
     style_fields: list= MISSING 
     device: str = "cuda:0"
-    augment_trajectory_num: int=100
-    augment_frame_num: int=10000
+    trajectory_num: int=100
+    ref_length_s: float= 20
     frame_begin: int=0
     frame_end: int=100
     expressive_goal_fields:list=MISSING
@@ -44,7 +45,9 @@ class RefMotionCfg:
     random_start: bool=False
     amp_obs_frame_num: int=1
     specify_init_values=None
-    
+
+
+
 class RefMotionLoader:
     def __init__(
         self, 
@@ -112,14 +115,15 @@ class RefMotionLoader:
                     for key, value in cfg.specify_init_values.items():
                         init_frame[self.trajectory_fields.index(key)] = value
 
-                    for idx in range(200):
-                        blend = float(idx/200.0)
+                    for idx in range(150):
+                        blend = float(idx/150.0)
                         head_transition_frames.append(self.blend_frame_pose(init_frame, first_frame, blend))
                         tail_transition_frames.append(self.blend_frame_pose(last_frame, init_frame, blend))
 
                     head_transition_frames = np.array(head_transition_frames)
                     tail_transition_frames = np.array(tail_transition_frames)
                     motion_data=np.concatenate([head_transition_frames,motion_data, tail_transition_frames], axis=0)
+                    logger.info(f"[Dataset Info] Adding specify init and end  300 frames, so motion data shape: {motion_data.shape[0]}.")
 
                 self.trajectories.append(torch.tensor(motion_data, dtype=torch.float32, device=cfg.device))
 
@@ -149,22 +153,24 @@ class RefMotionLoader:
         # Preload transitions if specified
         logger.info(f"[Dataset Info] Preloading data into self.preloaded_s")
 
-        if cfg.augment_frame_num is None:
-            self.cfg.augment_frame_num = int(min(self.trajectory_num_frames)-self.cfg.amp_obs_frame_num-1)
-        assert self.cfg.augment_frame_num <= min(self.trajectory_num_frames), f"required frame num  {cfg.augment_frame_num} should less than the loaded trajtectory frame number {self.trajectory_num_frames}"
-        if cfg.augment_trajectory_num is None:
-            self.cfg.augment_trajectory_num = self.num_motions
+        if self.cfg.ref_length_s is None:
+            self.cfg.ref_length_s = float(min(self.trajectory_durations))
+
+        self.augment_frame_num = int(min(int(self.cfg.ref_length_s/self.cfg.time_between_frames), min(self.trajectory_num_frames) - self.cfg.amp_obs_frame_num-1))
+        assert self.augment_frame_num <= min(self.trajectory_num_frames), f"required frame num  {self.augment_frame_num} should less than the loaded trajtectory frame number {self.trajectory_num_frames}"
+
+        if cfg.trajectory_num is None:
+            self.cfg.trajectory_num = self.num_motions
         else:
-            self.cfg.augment_trajectory_num = cfg.augment_trajectory_num
+            self.cfg.trajectory_num = cfg.trajectory_num
 
         # Define the field names for the dataset.
         ## Loading preloaded dataset
-        traj_idxs = self.weighted_traj_idx_sample_batch(size=self.cfg.augment_trajectory_num)
+        traj_idxs = self.weighted_traj_idx_sample_batch(size=self.cfg.trajectory_num)
 
         # Preallocate based on expected sizes
-        B = self.cfg.augment_trajectory_num
-        T = self.cfg.augment_frame_num + self.cfg.amp_obs_frame_num
-        #T = max(int(min(self.trajectory_num_frames)), self.cfg.augment_frame_num + self.cfg.amp_obs_frame_num)
+        B = self.cfg.trajectory_num
+        T = self.augment_frame_num + self.cfg.amp_obs_frame_num
         D = self.get_frame_at_time(0, 0).shape[0]  # Assuming all frames same shape
         
         preloaded_s = torch.empty((B, T, D), dtype=torch.float32, device=self.cfg.device)
@@ -175,21 +181,12 @@ class RefMotionLoader:
         
         self.preloaded_s = preloaded_s.requires_grad_(False)
 
-        print(f"Reference data requires_grad: {self.preloaded_s.requires_grad}")  # Should be False
-
-
         # Select init state and necessary fields
-        #assert set(self.cfg.init_state_fields).issubset(set(self.trajectory_fields)), f"The arguments field {self.cfg.init_state_fields} should have same elements with the dataset fields {self.trajectory_fields} in {motion_file}"
-        missing_fields = set(self.cfg.init_state_fields) - set(self.trajectory_fields)
-        assert not missing_fields, (
-            f"The fields {self.cfg.init_state_fields} should all exist in the dataset fields "
-            f"{self.trajectory_fields} for {motion_file}. "
-            f"Missing fields: {sorted(missing_fields)}"
-        )
-
+        assert set(self.cfg.init_state_fields).issubset(set(self.trajectory_fields)), f"The arguments field {self.cfg.init_state_fields} should have same elements with the dataset fields {self.trajectory_fields} in {motion_file}"
         self.init_state_fields_index = [self.trajectory_fields.index(key) for key in self.cfg.init_state_fields]
         self.base_velocity_index_w = [self.trajectory_fields.index(key) for key in ["root_vel_x_w","root_vel_y_w","root_ang_vel_z_w"]]
         self.base_velocity_index_b = [self.trajectory_fields.index(key) for key in ["root_vel_x_b","root_vel_y_b","root_ang_vel_z_b"]]
+        self.base_velocity_index = [self.trajectory_fields.index(key) for key in ["root_vel_x_b","root_vel_y_b","root_ang_vel_z_w"]]
         
         # Select root velocity
         if cfg.style_goal_fields is not None:
@@ -212,11 +209,11 @@ class RefMotionLoader:
         self.style_field_index = [self.trajectory_fields.index(key) for key in self.cfg.style_fields]
         self.selected_preloaded_s = self.preloaded_s[:,:,self.style_field_index]
 
-        self.frame_idx = torch.zeros(self.cfg.augment_trajectory_num).to(self.cfg.device).to(torch.long).requires_grad_(False) # num_env/num_traj frame_idx
-        self.start_idx = torch.zeros(self.cfg.augment_trajectory_num).to(self.cfg.device).to(torch.long).requires_grad_(False) # num_env/num_traj frame_idx
+        self.frame_idx = torch.zeros(self.cfg.trajectory_num).to(self.cfg.device).to(torch.long).requires_grad_(False) # num_env/num_traj frame_idx
+        self.start_idx = torch.zeros(self.cfg.trajectory_num).to(self.cfg.device).to(torch.long).requires_grad_(False) # num_env/num_traj frame_idx
         self.traj_idxs = torch.arange(self.preloaded_s.shape[0], device=self.preloaded_s.device).requires_grad_(False)
     
-        logger.info(f"[Dataset Info] self.preloaded_s dim are {len(self.preloaded_s)} and {self.preloaded_s[0].shape} in which augment_frame_num: {self.cfg.augment_frame_num} and amp_obs_history_leng: {self.cfg.amp_obs_frame_num}")
+        logger.info(f"[Dataset Info] self.preloaded_s dim are {len(self.preloaded_s)} and {self.preloaded_s[0].shape} in which augment_frame_num: {self.augment_frame_num} and amp_obs_history_leng: {self.cfg.amp_obs_frame_num}")
         logger.info(f"[Dataset Info] Trajectory number: {len(self.trajectory_idxs)}")
 
     def weighted_traj_idx_sample(self):
@@ -317,9 +314,9 @@ class RefMotionLoader:
             traj_idxs = np.arange(self.selected_preloaded_s.shape[0])
 
         self.frame_idx=0
-        start_idx = np.random.randint(self.preloaded_s.shape[1]-self.cfg.augment_frame_num-2+1)
+        start_idx = np.random.randint(self.preloaded_s.shape[1]-self.augment_frame_num-2+1)
         self.init_states = self.preloaded_s[:, start_idx, self.init_state_fields_index] # amp_obs_frame_num is the start frame
-        for idx in range(self.cfg.augment_frame_num):
+        for idx in range(self.augment_frame_num):
             self.frame_idx = idx
             frame_idx = start_idx + idx
             amp_expert = self.selected_preloaded_s[traj_idxs, frame_idx:frame_idx+self.cfg.amp_obs_frame_num, :]  # differet trajectories and frame times
@@ -327,6 +324,7 @@ class RefMotionLoader:
             # get base velocity
             self.base_velocity_w = self.preloaded_s[:,:,self.base_velocity_index_w][traj_idxs, frame_idx+1,:]
             self.base_velocity_b = self.preloaded_s[:,:,self.base_velocity_index_b][traj_idxs, frame_idx+1,:]
+            self.base_velocity = self.preloaded_s[:,:,self.base_velocity_index][traj_idxs, frame_idx+1,:]
             # get goal of style, current and next frames
             if self.cfg.style_goal_fields is not None:
                 self.style_goal = self.preloaded_s[:,:,self.style_goal_index][traj_idxs, frame_idx+1,:]
@@ -340,10 +338,10 @@ class RefMotionLoader:
                 self.expressive_joint_pos = self.preloaded_s[:,:,self.expressive_joint_pos_index][traj_idxs, frame_idx,:]
                 self.expressive_joint_vel = self.preloaded_s[:,:,self.expressive_joint_vel_index][traj_idxs, frame_idx,:]
             if self.cfg.expressive_link_name is not None:
-                self.expressive_link_pos_w = self.preloaded_s[:,:,self.expressive_link_pos_index_w][traj_idxs, frame_idx,:].reshape(self.cfg.augment_trajectory_num,-1,3)
-                self.expressive_link_vel_w = self.preloaded_s[:,:,self.expressive_link_vel_index_w][traj_idxs, frame_idx,:].reshape(self.cfg.augment_trajectory_num,-1,3)
-                self.expressive_link_pos_b = self.preloaded_s[:,:,self.expressive_link_pos_index_b][traj_idxs, frame_idx,:].reshape(self.cfg.augment_trajectory_num,-1,3)
-                self.expressive_link_vel_b = self.preloaded_s[:,:,self.expressive_link_vel_index_b][traj_idxs, frame_idx,:].reshape(self.cfg.augment_trajectory_num,-1,3)
+                self.expressive_link_pos_w = self.preloaded_s[:,:,self.expressive_link_pos_index_w][traj_idxs, frame_idx,:].reshape(self.cfg.trajectory_num,-1,3)
+                self.expressive_link_vel_w = self.preloaded_s[:,:,self.expressive_link_vel_index_w][traj_idxs, frame_idx,:].reshape(self.cfg.trajectory_num,-1,3)
+                self.expressive_link_pos_b = self.preloaded_s[:,:,self.expressive_link_pos_index_b][traj_idxs, frame_idx,:].reshape(self.cfg.trajectory_num,-1,3)
+                self.expressive_link_vel_b = self.preloaded_s[:,:,self.expressive_link_vel_index_b][traj_idxs, frame_idx,:].reshape(self.cfg.trajectory_num,-1,3)
 
             self.root_pos_w = self.preloaded_s[:,:,self.root_pos_index][traj_idxs, frame_idx,:]
             self.root_quat_w = self.preloaded_s[:,:,self.root_quat_index][traj_idxs, frame_idx,:]
@@ -443,6 +441,11 @@ class RefMotionLoader:
     def base_velocity_b(self):
         """Base velocity in body frame for next frame (goal)"""
         return self.preloaded_s[self.traj_idxs, self.next_frame_idx][:, self.base_velocity_index_b]
+
+    @property
+    def base_velocity(self):
+        """Base velocity in body frame for next frame (goal)"""
+        return self.preloaded_s[self.traj_idxs, self.next_frame_idx][:, self.base_velocity_index]
     
     @property
     def style_goal(self):
@@ -459,13 +462,16 @@ class RefMotionLoader:
         return self.preloaded_s[self.traj_idxs, self.next_frame_idx][:, self.expressive_goal_index]
 
 
+
+
+
     def reset(self, env_ids:torch.Tensor=None):
         if env_ids==None:
             self.frame_idx[:] = 0
-            self.start_idx[:] = np.random.randint(self.preloaded_s.shape[1]-self.cfg.augment_frame_num-2+1)
+            self.start_idx[:] = np.random.randint(self.preloaded_s.shape[1] - self.augment_frame_num-2+1)
         else:
             self.frame_idx[env_ids] = 0
-            self.start_idx[env_ids] = np.random.randint(self.preloaded_s.shape[1]-self.cfg.augment_frame_num-2+1)
+            self.start_idx[env_ids] = np.random.randint(self.preloaded_s.shape[1] - self.augment_frame_num-2+1)
 
     def sw_quat(self, frame_data):
         # switch root-rot quaternion from xyzw to wxyz
@@ -483,5 +489,4 @@ class RefMotionLoader:
     @property
     def num_motions(self):
         return len(self.trajectory_names)
-
 
