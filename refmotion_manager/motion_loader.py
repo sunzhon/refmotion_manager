@@ -8,8 +8,9 @@ import torch
 import numpy as np
 from pybullet_utils import transformations
 
-from . import motion_util
-from .pose3d import QuaternionNormalize
+from .utils import motion_util
+from .utils.pose3d import QuaternionNormalize
+
 from dataclasses import MISSING
 
 
