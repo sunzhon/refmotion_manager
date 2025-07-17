@@ -463,16 +463,15 @@ class RefMotionLoader:
         return self.preloaded_s[self.traj_idxs, self.next_frame_idx][:, self.expressive_goal_index]
 
 
-
-
-
-    def reset(self, env_ids:torch.Tensor=None):
-        if env_ids==None:
+    def reset(self, env_ids: torch.Tensor = None):
+        max_start = self.preloaded_s.shape[1] - self.augment_frame_num - 1  # avoid -2+1 confusion
+        if env_ids is None:
             self.frame_idx[:] = 0
-            self.start_idx[:] = np.random.randint(self.preloaded_s.shape[1] - self.augment_frame_num-2+1)
+            self.start_idx[:] = np.random.randint(0, max_start + 1, size=self.preloaded_s.shape[0])
         else:
             self.frame_idx[env_ids] = 0
-            self.start_idx[env_ids] = np.random.randint(self.preloaded_s.shape[1] - self.augment_frame_num-2+1)
+            self.start_idx[env_ids] = np.random.randint(0, max_start + 1, size=len(env_ids))
+
 
     def sw_quat(self, frame_data):
         # switch root-rot quaternion from xyzw to wxyz
