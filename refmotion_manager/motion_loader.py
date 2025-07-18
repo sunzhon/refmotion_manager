@@ -92,7 +92,8 @@ class RefMotionLoader:
                 self.cfg.frame_end = motion_data.shape[0] if self.cfg.frame_end is None else self.cfg.frame_end
                 
                 logger.info(f"[Dataset Info] Load {motion_file}")
-                logger.info(f"[Dataset Info] It has {motion_data.shape[0]} frames.")
+                logger.info(f"[Dataset Info] It has {motion_data.shape[0]} frames with frame duration: {float(motion_json['FrameDuration'])}")
+
                 motion_data = motion_data[self.cfg.frame_begin: self.cfg.frame_end, :]
                 logger.info(f"[Dataset Info] Select {motion_data.shape[0]} frames from frame_begin is {self.cfg.frame_begin} and frame_end is {self.cfg.frame_end}.")
                 #logger.info(f"[Dataset Info] Re-ordered trajectory fields: {self.style_fields}")
@@ -104,10 +105,12 @@ class RefMotionLoader:
                     root_rot = motion_util.standardize_quaternion(root_rot)  # standlize quaternion, make w > 0
                     motion_data[f_i, [self.trajectory_fields.index("root_rot_" + key) for key in ["x", "y", "z", "w"]]] = root_rot
 
-
                 # adding init status transition
                 if cfg.specify_init_values is not None:
-                    logger.info(f"Specify init values: {cfg.specify_init_values}")
+                    logger.info(f"[Dataset Info] Specify init values: {cfg.specify_init_values}")
+                    head_tail_time_s = 2 # seconds
+                    logger.info(f"[Dataset Info] adding {head_tail_time_s} seconds head and {head_tail_time_s} seconds tails")
+
                     first_frame = np.copy(motion_data[0,:])
                     last_frame = np.copy(motion_data[-1,:])
                     init_frame = np.copy(first_frame)
@@ -115,16 +118,17 @@ class RefMotionLoader:
                     tail_transition_frames=[]
                     for key, value in cfg.specify_init_values.items():
                         init_frame[self.trajectory_fields.index(key)] = value
-
-                    for idx in range(150):
-                        blend = float(idx/150.0)
+                    
+                    head_tail_frame_num = int(head_tail_time_s/float(motion_json['FrameDuration']))
+                    for idx in range(head_tail_frame_num):
+                        blend = float(idx/head_tail_frame_num)
                         head_transition_frames.append(self.blend_frame_pose(init_frame, first_frame, blend))
                         tail_transition_frames.append(self.blend_frame_pose(last_frame, init_frame, blend))
 
                     head_transition_frames = np.array(head_transition_frames)
                     tail_transition_frames = np.array(tail_transition_frames)
                     motion_data=np.concatenate([head_transition_frames,motion_data, tail_transition_frames], axis=0)
-                    logger.info(f"[Dataset Info] Adding specify init and end  300 frames, so motion data shape: {motion_data.shape[0]}.")
+                    logger.info(f"[Dataset Info] Adding specify init and end {2*head_tail_frame_num} frames, so motion data shape: {motion_data.shape[0]}.")
 
                 self.trajectories.append(torch.tensor(motion_data, dtype=torch.float32, device=cfg.device))
 
@@ -157,8 +161,8 @@ class RefMotionLoader:
         if self.cfg.ref_length_s is None:
             self.cfg.ref_length_s = float(min(self.trajectory_durations))
 
-        self.augment_frame_num = int(min(int(self.cfg.ref_length_s/self.cfg.time_between_frames), min(self.trajectory_num_frames) - self.cfg.amp_obs_frame_num-1))
-        assert self.augment_frame_num <= min(self.trajectory_num_frames), f"required frame num  {self.augment_frame_num} should less than the loaded trajtectory frame number {self.trajectory_num_frames}"
+        self.augment_frame_num = int(self.cfg.ref_length_s/self.cfg.time_between_frames)
+        logger.info(f"[Dataset Info] Preloading data into augment frame num is {self.augment_frame_num} calculated by ref_length_s {self.cfg.ref_length_s}")
 
         if cfg.trajectory_num is None:
             self.cfg.trajectory_num = self.num_motions
