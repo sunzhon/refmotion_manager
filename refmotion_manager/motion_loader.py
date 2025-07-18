@@ -88,14 +88,14 @@ class RefMotionLoader:
                 # motion_data = self.reorder_from_pybullet_to_isaac(motion_data)
                 self.trajectory_fields = motion_json["Fields"]
 
-                self.cfg.frame_begin = self.cfg.frame_begin if self.cfg.frame_begin is not None else 0
-                self.cfg.frame_end = motion_data.shape[0] if self.cfg.frame_end is None else self.cfg.frame_end
+                frame_begin = self.cfg.frame_begin if self.cfg.frame_begin is not None else 0
+                frame_end = motion_data.shape[0] if self.cfg.frame_end is None else self.cfg.frame_end
                 
                 logger.info(f"[Dataset Info] Load {motion_file}")
                 logger.info(f"[Dataset Info] It has {motion_data.shape[0]} frames with frame duration: {float(motion_json['FrameDuration'])}")
 
-                motion_data = motion_data[self.cfg.frame_begin: self.cfg.frame_end, :]
-                logger.info(f"[Dataset Info] Select {motion_data.shape[0]} frames from frame_begin is {self.cfg.frame_begin} and frame_end is {self.cfg.frame_end}.")
+                motion_data = motion_data[frame_begin: frame_end, :]
+                logger.info(f"[Dataset Info] Select {motion_data.shape[0]} frames from frame_begin is {frame_begin} and frame_end is {frame_end}.")
                 #logger.info(f"[Dataset Info] Re-ordered trajectory fields: {self.style_fields}")
 
                 # Normalize and standardize quaternions.
@@ -162,7 +162,7 @@ class RefMotionLoader:
             self.cfg.ref_length_s = float(min(self.trajectory_durations))
 
         self.augment_frame_num = int(self.cfg.ref_length_s/self.cfg.time_between_frames)
-        logger.info(f"[Dataset Info] Preloading data into augment frame num is {self.augment_frame_num} calculated by ref_length_s {self.cfg.ref_length_s}")
+        logger.info(f"[Dataset Info] Preloading data into ref motion frame num (self.augment_frame_num) is {self.augment_frame_num} calculated by ref_length_s {self.cfg.ref_length_s}")
 
         if cfg.trajectory_num is None:
             self.cfg.trajectory_num = self.num_motions
@@ -474,7 +474,10 @@ class RefMotionLoader:
             self.start_idx[:] = torch.randint(low=0, high=max_start + 1, size=(self.preloaded_s.shape[0],),device=self.start_idx.device)
         else:
             self.frame_idx[env_ids] = 0
-            self.start_idx[env_ids] = torch.randint(low=0, high=max_start + 1, size=(len(env_ids),), device=self.start_idx.device)
+            # NOTE, CHECKING THIS LATER
+            #import pdb;pdb.set_trace()
+            #self.start_idx[env_ids] = torch.randint(low=0, high=max_start + 1, size=(len(env_ids),), device=self.start_idx.device)
+            self.start_idx[env_ids] = 0.0 
 
 
     def sw_quat(self, frame_data):
