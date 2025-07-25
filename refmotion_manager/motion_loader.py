@@ -250,7 +250,7 @@ class RefMotionLoader:
                 start_time = np.random.uniform(high = random_start_threshold, size=1)*self.trajectory_durations[traj_idx]
             else:
                 start_time = 0.0
-            time_samples = start_time + np.arange(0, size * self.cfg.time_between_frames, self.cfg.time_between_frames)
+            time_samples = start_time + np.arange(0, size * self.cfg.time_between_frames, self.cfg.time_between_frames)[:size]
             time_samples = np.minimum(time_samples, self.trajectory_durations[traj_idx]-subst)
         return time_samples
 
