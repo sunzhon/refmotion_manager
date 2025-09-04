@@ -32,14 +32,16 @@ class RefMotionCfg:
     shuffle:bool=False
     motion_files: str= MISSING
     
-    init_state_fields: list= MISSING 
-    style_goal_fields: list= None
-    style_fields: list= MISSING 
     device: str = "cuda:0"
     trajectory_num: int=100
     ref_length_s: float= 20
     frame_begin: int=0
     frame_end: int=100
+
+    init_state_fields: list= MISSING 
+    style_goal_fields: list= None
+    style_fields: list= MISSING 
+
     expressive_goal_fields:list=MISSING
     expressive_joint_name:list=MISSING
     expressive_link_name:list=MISSING
