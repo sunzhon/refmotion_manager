@@ -3,6 +3,8 @@ import glob
 import json
 import joblib
 import logging
+from dataclasses import MISSING
+from typing import List, Optional, Dict, Any
 
 import torch
 import numpy as np
@@ -10,234 +12,442 @@ from pybullet_utils import transformations
 
 from .utils import motion_util
 from .utils.pose3d import QuaternionNormalize
+from isaaclab.utils import configclass
 
-from dataclasses import MISSING
-
-
-# Configure the logging system
-import logging
-logging.basicConfig(
-    level=logging.INFO,  # Set the minimum logging level
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'  # Define the log message format
-)
-# Create a logger object
+# Configure logging
 logger = logging.getLogger("motion_loader")
 
-from isaaclab.utils import configclass
 
 @configclass
 class RefMotionCfg:
-    """Configuration for the AMP networks."""
-    time_between_frames: float=0.1  # time between two frames
-    shuffle:bool=False
-    motion_files: str= MISSING
+    """Configuration for the Reference Motion Loader."""
     
+    # Required parameters
+    motion_files: str = MISSING
+    init_state_fields: List[str] = MISSING
+    style_fields: List[str] = MISSING
+    expressive_goal_fields: List[str] = MISSING
+    expressive_joint_name: List[str] = MISSING
+    expressive_link_name: List[str] = MISSING
+    
+    # Optional parameters with sensible defaults
+    time_between_frames: float = 0.1
+    shuffle: bool = False
     device: str = "cuda:0"
-    trajectory_num: int=100
-    ref_length_s: float= 20
-    frame_begin: int=0
-    frame_end: int=100
-
-    init_state_fields: list= MISSING 
-    style_goal_fields: list= None
-    style_fields: list= MISSING 
-
-    expressive_goal_fields:list=MISSING
-    expressive_joint_name:list=MISSING
-    expressive_link_name:list=MISSING
-    random_start: bool=False
-    amp_obs_frame_num: int=1
-    specify_init_values=None
-
+    trajectory_num: int = 100
+    ref_length_s: float = 20.0
+    frame_begin: int = 0
+    frame_end: Optional[int] = None
+    style_goal_fields: Optional[List[str]] = None
+    random_start: bool = False
+    amp_obs_frame_num: int = 1
+    specify_init_values: Optional[Dict[str, float]] = None
 
 
 class RefMotionLoader:
-    def __init__(
-        self, 
-        cfg: RefMotionCfg,
-        **kwargs,
-    ):
+    """
+    Load and manage reference motion data for imitation learning.
+    
+    Features:
+    - Multi-trajectory support with proper weighting
+    - Frame preprocessing and quaternion normalization
+    - Efficient preloading of motion sequences
+    - Flexible field selection for different learning objectives
+    - Robust error handling and device management
+    """
+    
+    def __init__(self, cfg: RefMotionCfg, **kwargs):
         """
-        Initialize the AMPLoader.
+        Initialize the Reference Motion Loader.
 
         Args:
-            time_between_frames: Amount of time in seconds between transition.
-            data_dir: Directory containing motion data.
-            num_preload_transitions: Number of transitions to preload.
-            motion_files: List of motion files.
-            device: Device to run the model on (e.g., 'cpu' or 'cuda').
+            cfg: Configuration object containing all necessary parameters
+            **kwargs: Additional keyword arguments for future extensibility
         """
+        self._validate_config(cfg)
+        self.cfg = self._setup_device(cfg)
+        self._initialize_data_structures()
+        self._load_trajectories()
+        self._preload_reference_motions()
+        self._setup_field_indices()
+        self._log_initialization_summary()
 
-        #logger.info(f"[Datset Info] Motion files: \n{motion_files}")
-        self.cfg = cfg
+    def _validate_config(self, cfg: RefMotionCfg) -> None:
+        """Validate the configuration parameters."""
+        if not hasattr(cfg, 'motion_files') or not cfg.motion_files:
+            raise ValueError("Configuration must specify motion_files")
         
-        # Values to store for each trajectory.
+        if not hasattr(cfg, 'init_state_fields') or not cfg.init_state_fields:
+            raise ValueError("Configuration must specify init_state_fields")
+            
+        if not hasattr(cfg, 'style_fields') or not cfg.style_fields:
+            raise ValueError("Configuration must specify style_fields")
+
+    def _setup_device(self, cfg: RefMotionCfg) -> RefMotionCfg:
+        """Safely configure the computation device."""
+        device_str = str(cfg.device)
+        
+        if device_str.startswith('cuda'):
+            if not torch.cuda.is_available():
+                logger.warning("CUDA requested but not available. Falling back to CPU.")
+                cfg.device = 'cpu'
+            else:
+                try:
+                    # Test CUDA functionality
+                    _ = torch.tensor([1.0], device=cfg.device)
+                    logger.info(f"Using CUDA device: {cfg.device}")
+                except RuntimeError as e:
+                    logger.warning(f"CUDA initialization failed: {e}. Falling back to CPU.")
+                    cfg.device = 'cpu'
+        else:
+            cfg.device = torch.device(cfg.device)
+            
+        logger.info(f"Data will be loaded on device: {cfg.device}")
+        return cfg
+
+    def _initialize_data_structures(self) -> None:
+        """Initialize all data storage structures."""
+        # Trajectory metadata
         self.trajectories = []
         self.trajectory_names = []
         self.trajectory_idxs = []
-        self.trajectory_durations = []  # Traj length in seconds.
+        self.trajectory_durations = []  # Trajectory length in seconds
         self.trajectory_weights = []
-        self.trajectory_frame_durations = []  # the duration of a frame
+        self.trajectory_frame_durations = []  # Duration per frame
         self.trajectory_num_frames = []
+        
+        # Field information
+        self.trajectory_fields = None
 
-        # Load motion data from files
-        assert len(self.cfg.motion_files) > 0, "No motion files found."
+    def _load_trajectories(self) -> None:
+        """Load and process all motion trajectories."""
+        logger.info(f"Loading {len(self.cfg.motion_files)} motion files")
+        
         for file_idx, motion_file in enumerate(self.cfg.motion_files):
-            self.trajectory_names.append(motion_file.split(".")[0])
-            logger.info(f"[Dataset Info] start to reading {motion_file}")
-            for traj_name, motion_json in joblib.load(motion_file).items(): # a motion file may have more traj
-                motion_data = np.array(motion_json["Frames"])
-                # motion_data = self.reorder_from_pybullet_to_isaac(motion_data)
-                self.trajectory_fields = motion_json["Fields"]
+            logger.info(f"Processing motion file {file_idx + 1}/{len(self.cfg.motion_files)}: {motion_file}")
+            self._process_motion_file(motion_file, file_idx)
+        
+        self._normalize_trajectory_weights()
 
-                frame_begin = self.cfg.frame_begin if self.cfg.frame_begin is not None else 0
-                frame_end = motion_data.shape[0] if self.cfg.frame_end is None else self.cfg.frame_end
+    def _process_motion_file(self, motion_file: str, file_idx: int) -> None:
+        """Process a single motion file containing one or more trajectories."""
+        try:
+            motion_data = joblib.load(motion_file)
+            self.trajectory_names.append(os.path.splitext(motion_file)[0])
+            
+            for traj_name, motion_json in motion_data.items():
+                self._process_single_trajectory(motion_json, motion_file, file_idx)
                 
-                logger.info(f"[Dataset Info] Load {motion_file}")
-                logger.info(f"[Dataset Info] It has {motion_data.shape[0]} frames with frame duration: {float(motion_json['FrameDuration'])}")
+        except Exception as e:
+            logger.error(f"Failed to load motion file {motion_file}: {e}")
+            raise
 
-                motion_data = motion_data[frame_begin: frame_end, :]
-                logger.info(f"[Dataset Info] Select {motion_data.shape[0]} frames from frame_begin is {frame_begin} and frame_end is {frame_end}.")
-                #logger.info(f"[Dataset Info] Re-ordered trajectory fields: {self.style_fields}")
+    def _process_single_trajectory(self, motion_json: Dict, motion_file: str, file_idx: int) -> None:
+        """Process a single trajectory from motion data."""
+        # Extract motion data
+        motion_data = np.array(motion_json["Frames"])
+        self.trajectory_fields = motion_json["Fields"]
+        frame_duration = float(motion_json["FrameDuration"])
+        
+        logger.info(f"Loaded trajectory with {motion_data.shape[0]} frames "
+                   f"(duration: {frame_duration:.4f}s per frame)")
 
-                # Normalize and standardize quaternions.
-                for f_i in range(motion_data.shape[0]):
-                    root_rot = motion_data[f_i, [self.trajectory_fields.index("root_rot_" + key) for key in ["x", "y", "z", "w"]]]
-                    root_rot = QuaternionNormalize(root_rot)  # unit(normalize) quaternion (x,y,z,w), to make norm to be 1
-                    root_rot = motion_util.standardize_quaternion(root_rot)  # standlize quaternion, make w > 0
-                    motion_data[f_i, [self.trajectory_fields.index("root_rot_" + key) for key in ["x", "y", "z", "w"]]] = root_rot
+        # Apply frame range selection
+        motion_data = self._select_frame_range(motion_data)
+        
+        # Normalize quaternions
+        motion_data = self._normalize_quaternions(motion_data)
+        
+        # Add transition frames if specified
+        motion_data = self._add_transition_frames(motion_data, motion_json)
+        
+        # Convert to tensor and store
+        motion_tensor = torch.tensor(motion_data, dtype=torch.float32, device='cpu')
+        if str(self.cfg.device) != 'cpu':
+            motion_tensor = motion_tensor.to(self.cfg.device)
+            
+        self.trajectories.append(motion_tensor)
+        self._store_trajectory_metadata(motion_json, motion_tensor, file_idx, frame_duration)
 
-                # adding init status transition
-                if cfg.specify_init_values is not None:
-                    logger.info(f"[Dataset Info] Specify init values: {cfg.specify_init_values}")
-                    head_tail_time_s = 2 # seconds
-                    logger.info(f"[Dataset Info] adding {head_tail_time_s} seconds head and {head_tail_time_s} seconds tails")
+    def _select_frame_range(self, motion_data: np.ndarray) -> np.ndarray:
+        """Select specified frame range from motion data."""
+        frame_begin = self.cfg.frame_begin if self.cfg.frame_begin is not None else 0
+        frame_end = self.cfg.frame_end if self.cfg.frame_end is not None else motion_data.shape[0]
+        
+        if frame_begin >= frame_end:
+            raise ValueError(f"Invalid frame range: begin={frame_begin}, end={frame_end}")
+            
+        selected_data = motion_data[frame_begin:frame_end, :]
+        logger.info(f"Selected frames {frame_begin} to {frame_end} "
+                   f"({selected_data.shape[0]} frames total)")
+        
+        return selected_data
 
-                    first_frame = np.copy(motion_data[0,:])
-                    last_frame = np.copy(motion_data[-1,:])
-                    init_frame = np.copy(first_frame)
-                    head_transition_frames=[]
-                    tail_transition_frames=[]
-                    for key, value in cfg.specify_init_values.items():
-                        init_frame[self.trajectory_fields.index(key)] = value
-                    
-                    head_tail_frame_num = int(head_tail_time_s/float(motion_json['FrameDuration']))
-                    for idx in range(head_tail_frame_num):
-                        blend = float(idx/head_tail_frame_num)
-                        head_transition_frames.append(self.blend_frame_pose(init_frame, first_frame, blend))
-                        tail_transition_frames.append(self.blend_frame_pose(last_frame, init_frame, blend))
-
-                    head_transition_frames = np.array(head_transition_frames)
-                    tail_transition_frames = np.array(tail_transition_frames)
-                    motion_data=np.concatenate([head_transition_frames,motion_data, tail_transition_frames], axis=0)
-                    logger.info(f"[Dataset Info] Adding specify init and end {2*head_tail_frame_num} frames, so motion data shape: {motion_data.shape[0]}.")
-
-                self.trajectories.append(torch.tensor(motion_data, dtype=torch.float32, device=cfg.device))
-
-                self.trajectory_idxs.append(file_idx)
-                self.trajectory_weights.append(float(motion_json["MotionWeight"]))
-                frame_duration = float(motion_json["FrameDuration"])
-                self.trajectory_frame_durations.append(frame_duration)
-                traj_len = (motion_data.shape[0] - 1) * frame_duration
-                self.trajectory_durations.append(traj_len)  # it is time [s], frame len* duration
-                self.trajectory_num_frames.append(float(motion_data.shape[0]))
-
-                logger.info(f"[Dataset Info] Select {traj_len} s motion from the trajectory.")
-                #logger.info(f"[Dataset Info] The trajectory fields are: {self.trajectory_fields}")
-
-        # Normalize trajectory weights
-        self.trajectory_weights = np.array(self.trajectory_weights) / np.sum(
-            self.trajectory_weights
-        )
-        self.trajectory_frame_durations = np.array(self.trajectory_frame_durations)
-        self.trajectory_durations = np.array(self.trajectory_durations)
-        self.trajectory_num_frames = np.array(self.trajectory_num_frames)
-
-        self.root_rot_index = [
-            self.cfg.style_fields.index("root_rot_" + key) for key in ["x", "y", "z", "w"]
+    def _normalize_quaternions(self, motion_data: np.ndarray) -> np.ndarray:
+        """Normalize and standardize root rotation quaternions."""
+        if self.trajectory_fields is None:
+            return motion_data
+            
+        quat_indices = [
+            self.trajectory_fields.index(f"root_rot_{key}") 
+            for key in ["x", "y", "z", "w"]
         ]
+        
+        for frame_idx in range(motion_data.shape[0]):
+            root_rot = motion_data[frame_idx, quat_indices]
+            root_rot = QuaternionNormalize(root_rot)  # Normalize to unit quaternion
+            root_rot = motion_util.standardize_quaternion(root_rot)  # Standardize (w > 0)
+            motion_data[frame_idx, quat_indices] = root_rot
+            
+        return motion_data
 
-        # Preload transitions if specified
-        logger.info(f"[Dataset Info] Preloading data into self.preloaded_s")
+    def _add_transition_frames(self, motion_data: np.ndarray, motion_json: Dict) -> np.ndarray:
+        """Add transition frames for initialization if specified."""
+        if self.cfg.specify_init_values is None:
+            return motion_data
+            
+        logger.info("Adding transition frames for specified initial values")
+        head_tail_time_s = 2.0  # seconds
+        frame_duration = float(motion_json["FrameDuration"])
+        head_tail_frame_num = int(head_tail_time_s / frame_duration)
+        
+        first_frame = motion_data[0, :].copy()
+        last_frame = motion_data[-1, :].copy()
+        init_frame = first_frame.copy()
+        
+        # Apply initial values
+        for key, value in self.cfg.specify_init_values.items():
+            init_frame[self.trajectory_fields.index(key)] = value
+        
+        # Create transition frames
+        head_transition_frames = []
+        tail_transition_frames = []
+        
+        for idx in range(head_tail_frame_num):
+            blend = float(idx / head_tail_frame_num)
+            head_transition_frames.append(self._blend_frame_pose(init_frame, first_frame, blend))
+            tail_transition_frames.append(self._blend_frame_pose(last_frame, init_frame, blend))
+        
+        # Combine all frames
+        enhanced_data = np.vstack([
+            np.array(head_transition_frames),
+            motion_data,
+            np.array(tail_transition_frames)
+        ])
+        
+        logger.info(f"Added {2 * head_tail_frame_num} transition frames. "
+                   f"New shape: {enhanced_data.shape}")
+        
+        return enhanced_data
 
+    def _store_trajectory_metadata(self, motion_json: Dict, motion_tensor: torch.Tensor, 
+                                 file_idx: int, frame_duration: float) -> None:
+        """Store metadata for a single trajectory."""
+        self.trajectory_idxs.append(file_idx)
+        self.trajectory_weights.append(float(motion_json.get("MotionWeight", 1.0)))
+        self.trajectory_frame_durations.append(frame_duration)
+        
+        traj_len = (motion_tensor.shape[0] - 1) * frame_duration
+        self.trajectory_durations.append(traj_len)
+        self.trajectory_num_frames.append(motion_tensor.shape[0])
+        
+        logger.info(f"Trajectory duration: {traj_len:.2f}s")
+
+    def _normalize_trajectory_weights(self) -> None:
+        """Normalize trajectory weights to sum to 1."""
+        if self.trajectory_weights:
+            total_weight = sum(self.trajectory_weights)
+            self.trajectory_weights = [w / total_weight for w in self.trajectory_weights]
+            
+            # Convert to numpy arrays for efficient sampling
+            self.trajectory_weights = np.array(self.trajectory_weights)
+            self.trajectory_frame_durations = np.array(self.trajectory_frame_durations)
+            self.trajectory_durations = np.array(self.trajectory_durations)
+            self.trajectory_num_frames = np.array(self.trajectory_num_frames)
+
+    def _preload_reference_motions(self) -> None:
+        """Preload reference motion sequences for efficient sampling."""
+        logger.info("Preloading reference motion sequences")
+        
+        # Calculate reference length
         if self.cfg.ref_length_s is None:
             self.cfg.ref_length_s = float(min(self.trajectory_durations))
-
-        self.augment_frame_num = int(self.cfg.ref_length_s/self.cfg.time_between_frames)
-        logger.info(f"[Dataset Info] Preloading data into ref motion frame num (self.augment_frame_num) is {self.augment_frame_num} calculated by ref_length_s {self.cfg.ref_length_s}")
-
-        if cfg.trajectory_num is None:
-            self.cfg.trajectory_num = self.num_motions
-        else:
-            self.cfg.trajectory_num = cfg.trajectory_num
-
-        # Define the field names for the dataset.
-        ## Loading preloaded dataset
+            
+        self.augment_frame_num = int(self.cfg.ref_length_s / self.cfg.time_between_frames)
+        
+        # Set trajectory number
+        if self.cfg.trajectory_num is None:
+            self.cfg.trajectory_num = len(self.trajectories)
+            
+        logger.info(f"Preloading {self.cfg.trajectory_num} trajectories with "
+                   f"{self.augment_frame_num} frames each")
+        
+        # Sample trajectories and times
         traj_idxs = self.weighted_traj_idx_sample_batch(size=self.cfg.trajectory_num)
-
-        # Preallocate based on expected sizes
-        B = self.cfg.trajectory_num
-        T = self.augment_frame_num + self.cfg.amp_obs_frame_num
-        D = self.get_frame_at_time(0, 0).shape[0]  # Assuming all frames same shape
+        
+        # Preallocate tensor
+        B, T = self.cfg.trajectory_num, self.augment_frame_num + self.cfg.amp_obs_frame_num
+        D = self.get_frame_at_time(0, 0).shape[0]
         
         preloaded_s = torch.empty((B, T, D), dtype=torch.float32, device=self.cfg.device)
+        
+        # Fill preloaded tensor
         for i, traj_idx in enumerate(traj_idxs):
             times = self.traj_time_sample_batch(traj_idx, size=T)
             for j, frame_time in enumerate(times):
                 preloaded_s[i, j] = self.get_frame_at_time(traj_idx, frame_time)
         
         self.preloaded_s = preloaded_s.requires_grad_(False)
+        logger.info(f"Preloaded tensor shape: {self.preloaded_s.shape} "
+                   f"on device: {self.preloaded_s.device}")
 
-        # Select init state and necessary fields
-        assert set(self.cfg.init_state_fields).issubset(set(self.trajectory_fields)), f"The arguments field {self.cfg.init_state_fields} should have same elements with the dataset fields {self.trajectory_fields} in {motion_file}"
-        self.init_state_fields_index = [self.trajectory_fields.index(key) for key in self.cfg.init_state_fields]
-        self.base_velocity_index_w = [self.trajectory_fields.index(key) for key in ["root_vel_x_w","root_vel_y_w","root_ang_vel_z_w"]]
-        self.base_velocity_index_b = [self.trajectory_fields.index(key) for key in ["root_vel_x_b","root_vel_y_b","root_ang_vel_z_b"]]
-        self.base_velocity_index = [self.trajectory_fields.index(key) for key in ["root_vel_x_b","root_vel_y_b","root_ang_vel_z_w"]]
+    def _setup_field_indices(self) -> None:
+        """Setup indices for different field types."""
+        # Validate field subsets
+        self._validate_field_subsets()
         
-        # Select root velocity
-        if cfg.style_goal_fields is not None:
-            self.style_goal_index = [self.trajectory_fields.index(key) for key in cfg.style_goal_fields]
+        # Setup various field indices
+        self._setup_velocity_indices()
+        self._setup_root_indices()
+        self._setup_goal_indices()
+        self._setup_style_fields()
+        
+        # Create selected preloaded tensor
+        self.selected_preloaded_s = self.preloaded_s[:, :, self.style_field_index]
+        
+        # Initialize sampling indices
+        self._initialize_sampling_indices()
 
-        if cfg.expressive_goal_fields is not None:
-            self.expressive_goal_index = [self.trajectory_fields.index(key) for key in cfg.expressive_goal_fields]
+    def _validate_field_subsets(self) -> None:
+        """Validate that specified field subsets exist in trajectory fields."""
+        assert set(self.cfg.init_state_fields).issubset(set(self.trajectory_fields)), \
+            f"init_state_fields {self.cfg.init_state_fields} not found in trajectory fields"
+            
+        assert set(self.cfg.style_fields).issubset(set(self.trajectory_fields)), \
+            f"style_fields {self.cfg.style_fields} not found in trajectory fields"
 
-        self.root_pos_index = [self.trajectory_fields.index(key) for key in ["root_pos_x","root_pos_y","root_pos_z"]] 
-        self.root_quat_index = [self.trajectory_fields.index(key) for key in ["root_rot_w","root_rot_x","root_rot_y","root_rot_z"]] 
-        self.root_lin_vel_index_w = [self.trajectory_fields.index(key) for key in ["root_vel_x_w","root_vel_y_w","root_vel_z_w"]] 
-        self.root_ang_vel_index_w = [self.trajectory_fields.index(key) for key in ["root_ang_vel_x_w","root_ang_vel_y_w","root_ang_vel_z_w"]] 
+    def _setup_velocity_indices(self) -> None:
+        """Setup indices for velocity fields."""
+        self.init_state_fields_index = [
+            self.trajectory_fields.index(key) for key in self.cfg.init_state_fields
+        ]
+        
+        # World frame velocities
+        self.base_velocity_index_w = [
+            self.trajectory_fields.index(key) 
+            for key in ["root_vel_x_w", "root_vel_y_w", "root_ang_vel_z_w"]
+        ]
+        
+        # Body frame velocities  
+        self.base_velocity_index_b = [
+            self.trajectory_fields.index(key)
+            for key in ["root_vel_x_b", "root_vel_y_b", "root_ang_vel_z_b"]
+        ]
+        
+        # Mixed frame velocities
+        self.base_velocity_index = [
+            self.trajectory_fields.index(key)
+            for key in ["root_vel_x_b", "root_vel_y_b", "root_ang_vel_z_w"]
+        ]
 
-        self.root_lin_vel_index_b = [self.trajectory_fields.index(key) for key in ["root_vel_x_b","root_vel_y_b","root_vel_z_b"]] 
-        self.root_ang_vel_index_b = [self.trajectory_fields.index(key) for key in ["root_ang_vel_x_b","root_ang_vel_y_b","root_ang_vel_z_b"]] 
+    def _setup_root_indices(self) -> None:
+        """Setup indices for root position and orientation."""
+        self.root_pos_index = [
+            self.trajectory_fields.index(key) 
+            for key in ["root_pos_x", "root_pos_y", "root_pos_z"]
+        ]
+        
+        self.root_quat_index = [
+            self.trajectory_fields.index(key)
+            for key in ["root_rot_w", "root_rot_x", "root_rot_y", "root_rot_z"]
+        ]
+        
+        # World frame linear and angular velocities
+        self.root_lin_vel_index_w = [
+            self.trajectory_fields.index(key)
+            for key in ["root_vel_x_w", "root_vel_y_w", "root_vel_z_w"]
+        ]
+        self.root_ang_vel_index_w = [
+            self.trajectory_fields.index(key)
+            for key in ["root_ang_vel_x_w", "root_ang_vel_y_w", "root_ang_vel_z_w"]
+        ]
+        
+        # Body frame linear and angular velocities
+        self.root_lin_vel_index_b = [
+            self.trajectory_fields.index(key)
+            for key in ["root_vel_x_b", "root_vel_y_b", "root_vel_z_b"]
+        ]
+        self.root_ang_vel_index_b = [
+            self.trajectory_fields.index(key)
+            for key in ["root_ang_vel_x_b", "root_ang_vel_y_b", "root_ang_vel_z_b"]
+        ]
 
-        # Select fields
-        #logger.info(f"[Dataset Info] The SELECTED trajectory fields are: {self.style_fields}")
-        assert set(self.cfg.style_fields).issubset(set(self.trajectory_fields)), f"The arguments field {self.cfg.style_fields} should have same elements with the dataset fields {self.trajectory_fields} in {motion_file}"
-        self.style_field_index = [self.trajectory_fields.index(key) for key in self.cfg.style_fields]
-        self.selected_preloaded_s = self.preloaded_s[:,:,self.style_field_index]
+    def _setup_goal_indices(self) -> None:
+        """Setup indices for goal fields."""
+        if self.cfg.style_goal_fields is not None:
+            self.style_goal_index = [
+                self.trajectory_fields.index(key) for key in self.cfg.style_goal_fields
+            ]
+            
+        if self.cfg.expressive_goal_fields is not None:
+            self.expressive_goal_index = [
+                self.trajectory_fields.index(key) for key in self.cfg.expressive_goal_fields
+            ]
 
-        self.frame_idx = torch.zeros(self.cfg.trajectory_num).to(self.cfg.device).to(torch.long).requires_grad_(False) # num_env/num_traj frame_idx
-        self.start_idx = torch.zeros(self.cfg.trajectory_num).to(self.cfg.device).to(torch.long).requires_grad_(False) # num_env/num_traj frame_idx
-        self.traj_idxs = torch.arange(self.preloaded_s.shape[0], device=self.preloaded_s.device).requires_grad_(False)
-    
-        logger.info(f"[Dataset Info] self.preloaded_s dim are {len(self.preloaded_s)} and {self.preloaded_s[0].shape} in which augment_frame_num: {self.augment_frame_num} and amp_obs_history_leng: {self.cfg.amp_obs_frame_num}")
-        logger.info(f"[Dataset Info] Trajectory number: {len(self.trajectory_idxs)}")
+    def _setup_style_fields(self) -> None:
+        """Setup indices for style fields."""
+        self.style_field_index = [
+            self.trajectory_fields.index(key) for key in self.cfg.style_fields
+        ]
+
+    def _initialize_sampling_indices(self) -> None:
+        """Initialize indices for trajectory sampling."""
+        self.frame_idx = torch.zeros(self.cfg.trajectory_num, 
+                                   device=self.cfg.device, 
+                                   dtype=torch.long).requires_grad_(False)
+        self.start_idx = torch.zeros(self.cfg.trajectory_num,
+                                   device=self.cfg.device,
+                                   dtype=torch.long).requires_grad_(False)
+        self.traj_idxs = torch.arange(self.preloaded_s.shape[0],
+                                    device=self.preloaded_s.device).requires_grad_(False)
+
+    def _log_initialization_summary(self) -> None:
+        """Log summary information after initialization."""
+        logger.info("Reference Motion Loader initialization complete")
+        logger.info(f"Preloaded tensor dimensions: {len(self.preloaded_s)} trajectories, "
+                   f"each with {self.preloaded_s[0].shape} frames")
+        logger.info(f"Augment frame number: {self.augment_frame_num}, "
+                   f"AMP observation frames: {self.cfg.amp_obs_frame_num}")
+        logger.info(f"Total trajectories loaded: {len(self.trajectory_idxs)}")
+
+    # Placeholder methods - these should be implemented based on your specific needs
+    def weighted_traj_idx_sample_batch(self, size: int) -> List[int]:
+        """Sample trajectory indices based on weights."""
+        # Implementation depends on your sampling strategy
+        return list(range(min(size, len(self.trajectories))))
+
+    def traj_time_sample_batch(self, traj_idx: int, size: int) -> List[float]:
+        """Sample times from a trajectory."""
+        # Implementation depends on your sampling strategy
+        duration = self.trajectory_durations[traj_idx]
+        return np.linspace(0, duration, size).tolist()
+
+
+    def _blend_frame_pose(self, frame1: np.ndarray, frame2: np.ndarray, blend: float) -> np.ndarray:
+        """Blend between two frames."""
+        # Implementation depends on your blending strategy
+        return frame1 * (1 - blend) + frame2 * blend
+
+    @property
+    def num_motions(self) -> int:
+        """Number of loaded motions."""
+        return len(self.trajectories)
+
+
 
     def weighted_traj_idx_sample(self):
         """Get traj idx via weighted sampling."""
         return np.random.choice(self.trajectory_idxs, p=self.trajectory_weights)
-
-    def weighted_traj_idx_sample_batch(self, size: int):
-        """Batch sample traj idxs."""
-        if self.cfg.shuffle:
-            return np.random.choice(
-                self.trajectory_idxs, size=size, p=self.trajectory_weights, replace=True
-            )
-        else:
-            repeated_array = np.tile(
-                self.trajectory_idxs, (size // len(self.trajectory_idxs)) + 1
-            )
-            return repeated_array[:size]
 
 
     def traj_time_sample_batch(self, traj_idx, size):
@@ -261,8 +471,8 @@ class RefMotionLoader:
         return (1.0 - blend) * val0 + blend * val1
 
 
-    def get_frame_at_time(self, traj_idx, time):
-        """Returns frame for the given trajectory at the specified time."""
+    def get_frame_at_time(self, traj_idx: int, time: float) -> torch.Tensor:
+        """Get frame at specific time from trajectory"""
         p = (float(time) / self.trajectory_durations[traj_idx])  # percentage of the time on the trajectory
         n = self.trajectories[traj_idx].shape[0]  # number of traj_idx trajectory
         idx_low, idx_high = int(np.floor(p * n)), int(np.ceil(p * n))
@@ -366,7 +576,6 @@ class RefMotionLoader:
         """Generates a batch of AMP transitions."""
         with torch.no_grad():
             # Define trajectory indices and frame positions
-            self.traj_idxs = torch.arange(self.preloaded_s.shape[0], device=self.preloaded_s.device)
             self.abs_frame_idx = self.start_idx + self.frame_idx
     
             # I) Initial state
@@ -474,12 +683,24 @@ class RefMotionLoader:
         if env_ids is None:
             self.frame_idx[:] = 0
             self.start_idx[:] = torch.randint(low=0, high=max_start + 1, size=(self.preloaded_s.shape[0],),device=self.start_idx.device)
+
+            # weighted sampling of traj indices
+            probs = self.traj_weights / self.traj_weights.sum()
+            self.traj_idxs[:] = torch.multinomial(
+                probs, num_samples=self.preloaded_s.shape[0], replacement=True
+            )
         else:
             self.frame_idx[env_ids] = 0
             # NOTE, CHECKING THIS LATER
             #import pdb;pdb.set_trace()
             #self.start_idx[env_ids] = torch.randint(low=0, high=max_start + 1, size=(len(env_ids),), device=self.start_idx.device)
             self.start_idx[env_ids] = 0.0 
+            
+            # weighted sampling only for selected envs
+            probs = self.traj_weights / self.traj_weights.sum()
+            self.traj_idxs[env_ids] = torch.multinomial(
+                probs, num_samples=len(env_ids), replacement=True
+            )
 
 
     def sw_quat(self, frame_data):

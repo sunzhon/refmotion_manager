@@ -12,7 +12,7 @@ from refmotion_manager.motion_loader import RefMotionLoader
 from test_loader_cfg import ref_motion_cfg
 ref_motion_cfg.time_between_frames=0.02
 ref_motion_cfg.motion_files=glob.glob(os.getenv("HOME")+"/workspace/lumos_ws/humanoid_demo_retarget/sources/data/motions/lus2_joint21/pkl/fall*")
-ref_motion_cfg.device="cpu"
+ref_motion_cfg.device="cuda:0"
 ref_motion_cfg.ref_length_s=5
 ref_motion = RefMotionLoader(ref_motion_cfg)
 
