@@ -83,27 +83,33 @@ class RefMotionLoader:
         if not hasattr(cfg, 'style_fields') or not cfg.style_fields:
             raise ValueError("Configuration must specify style_fields")
 
+
     def _setup_device(self, cfg: RefMotionCfg) -> RefMotionCfg:
         """Safely configure the computation device."""
         device_str = str(cfg.device)
-        
-        if device_str.startswith('cuda'):
+
+        if device_str.startswith("cuda"):
             if not torch.cuda.is_available():
                 logger.warning("CUDA requested but not available. Falling back to CPU.")
-                cfg.device = 'cpu'
+                cfg.device = "cpu"
             else:
                 try:
-                    # Test CUDA functionality
-                    _ = torch.tensor([1.0], device=cfg.device)
-                    logger.info(f"Using CUDA device: {cfg.device}")
+                    _ = torch.tensor([1.0], device=device_str)
+                    logger.info(f"Using CUDA device: {device_str}")
                 except RuntimeError as e:
                     logger.warning(f"CUDA initialization failed: {e}. Falling back to CPU.")
-                    cfg.device = 'cpu'
+                    cfg.device = "cpu"
         else:
-            cfg.device = torch.device(cfg.device)
-            
+            cfg.device = "cpu"
+
         logger.info(f"Data will be loaded on device: {cfg.device}")
         return cfg
+
+    @property
+    def torch_device(self) -> torch.device:
+        """Return torch.device object for computations."""
+        return torch.device(self.cfg.device)
+
 
     def _initialize_data_structures(self) -> None:
         """Initialize all data storage structures."""
@@ -162,7 +168,7 @@ class RefMotionLoader:
         motion_data = self._add_transition_frames(motion_data, motion_json)
         
         # Convert to tensor and store
-        motion_tensor = torch.tensor(motion_data, dtype=torch.float32, device='cpu')
+        motion_tensor = torch.tensor(motion_data, dtype=torch.float32, device=self.cfg.device)
         if str(self.cfg.device) != 'cpu':
             motion_tensor = motion_tensor.to(self.cfg.device)
             
@@ -297,7 +303,8 @@ class RefMotionLoader:
             for j, frame_time in enumerate(times):
                 preloaded_s[i, j] = self.get_frame_at_time(traj_idx, frame_time)
         
-        self.preloaded_s = preloaded_s.requires_grad_(False)
+        #self.preloaded_s = preloaded_s.requires_grad_(False)
+        self.preloaded_s = preloaded_s
         logger.info(f"Preloaded tensor shape: {self.preloaded_s.shape} "
                    f"on device: {self.preloaded_s.device}")
 
@@ -523,80 +530,27 @@ class RefMotionLoader:
             # blend_fd = torch.cat((other_blend_fd, rot_blend_fd), dim=-1, dtype=torch.float32, device=self.device)
         return blend_fd
 
-    def expert_obs_generator(self):
-        """Generates a batch of AMP transitions."""
-        if self.cfg.shuffle:
-            traj_idxs = np.random.choice(self.selected_preloaded_s.shape[0], size=self.selected_preloaded_s.shape[0])  # sample random sequence of frame
-        else:
-            traj_idxs = np.arange(self.selected_preloaded_s.shape[0])
-
-        self.frame_idx=0
-        start_idx = np.random.randint(self.preloaded_s.shape[1]-self.augment_frame_num-2+1)
-        self.init_states = self.preloaded_s[:, start_idx, self.init_state_fields_index] # amp_obs_frame_num is the start frame
-        for idx in range(self.augment_frame_num):
-            self.frame_idx = idx
-            frame_idx = start_idx + idx
-            amp_expert = self.selected_preloaded_s[traj_idxs, frame_idx:frame_idx+self.cfg.amp_obs_frame_num, :]  # differet trajectories and frame times
-            
-            # get base velocity
-            self.base_velocity_w = self.preloaded_s[:,:,self.base_velocity_index_w][traj_idxs, frame_idx+1,:]
-            self.base_velocity_b = self.preloaded_s[:,:,self.base_velocity_index_b][traj_idxs, frame_idx+1,:]
-            self.base_velocity = self.preloaded_s[:,:,self.base_velocity_index][traj_idxs, frame_idx+1,:]
-            # get goal of style, current and next frames
-            if self.cfg.style_goal_fields is not None:
-                self.style_goal = self.preloaded_s[:,:,self.style_goal_index][traj_idxs, frame_idx+1,:]
-
-            # expressive goal states of current and next frames
-            if self.cfg.expressive_goal_fields is not None:
-                self.expressive_goal = self.preloaded_s[:,:,self.expressive_goal_index][traj_idxs, frame_idx+1,:]
-
-            # expressive states for calculating rewards , using the current frame
-            if self.cfg.expressive_joint_name is not None:
-                self.expressive_joint_pos = self.preloaded_s[:,:,self.expressive_joint_pos_index][traj_idxs, frame_idx,:]
-                self.expressive_joint_vel = self.preloaded_s[:,:,self.expressive_joint_vel_index][traj_idxs, frame_idx,:]
-            if self.cfg.expressive_link_name is not None:
-                self.expressive_link_pos_w = self.preloaded_s[:,:,self.expressive_link_pos_index_w][traj_idxs, frame_idx,:].reshape(self.cfg.trajectory_num,-1,3)
-                self.expressive_link_vel_w = self.preloaded_s[:,:,self.expressive_link_vel_index_w][traj_idxs, frame_idx,:].reshape(self.cfg.trajectory_num,-1,3)
-                self.expressive_link_pos_b = self.preloaded_s[:,:,self.expressive_link_pos_index_b][traj_idxs, frame_idx,:].reshape(self.cfg.trajectory_num,-1,3)
-                self.expressive_link_vel_b = self.preloaded_s[:,:,self.expressive_link_vel_index_b][traj_idxs, frame_idx,:].reshape(self.cfg.trajectory_num,-1,3)
-
-            self.root_pos_w = self.preloaded_s[:,:,self.root_pos_index][traj_idxs, frame_idx,:]
-            self.root_quat_w = self.preloaded_s[:,:,self.root_quat_index][traj_idxs, frame_idx,:]
-            self.root_lin_vel_w = self.preloaded_s[:,:,self.root_lin_vel_index_w][traj_idxs, frame_idx,:]
-            self.root_ang_vel_w = self.preloaded_s[:,:,self.root_ang_vel_index_w][traj_idxs, frame_idx,:]
-            self.root_lin_vel_b = self.preloaded_s[:,:,self.root_lin_vel_index_b][traj_idxs, frame_idx,:]
-            self.root_ang_vel_b = self.preloaded_s[:,:,self.root_ang_vel_index_b][traj_idxs, frame_idx,:]
-
-            #yield s_f.reshape(s_f.shape[0],-1)
-            yield amp_expert.flatten(1,2)
-
-
-
     def step(self):
         """Generates a batch of AMP transitions."""
-        with torch.no_grad():
-            # Define trajectory indices and frame positions
-            self.abs_frame_idx = self.start_idx + self.frame_idx
+        # Define trajectory indices and frame positions
+        self.abs_frame_idx = self.start_idx + self.frame_idx
     
-            # I) Initial state
-            self.init_states = self.preloaded_s[self.traj_idxs, self.start_idx, :][:, self.init_state_fields_index]
+        # I) AMP observation
+        amp_seq = [
+            self.preloaded_s[
+                self.traj_idxs[i], 
+                self.abs_frame_idx[i] : self.abs_frame_idx[i] + self.cfg.amp_obs_frame_num, 
+                self.style_field_index
+            ].reshape(1, -1) 
+            for i in range(len(self.traj_idxs))
+        ]
+        self.amp_expert = torch.cat(amp_seq, dim=0)
     
-            # II) AMP observation
-            amp_seq = [
-                self.preloaded_s[
-                    self.traj_idxs[i], 
-                    self.abs_frame_idx[i] : self.abs_frame_idx[i] + self.cfg.amp_obs_frame_num, 
-                    self.style_field_index
-                ].reshape(1, -1) 
-                for i in range(len(self.traj_idxs))
-            ]
-            self.amp_expert = torch.cat(amp_seq, dim=0)
+        # II) Goal (next frame data)
+        self.next_frame_idx = self.abs_frame_idx + 1
     
-            # III) Goal (next frame data)
-            self.next_frame_idx = self.abs_frame_idx + 1
-    
-            # Increment frame counter
-            self.frame_idx += 1
+        # Increment frame counter
+        self.frame_idx += 1
 
     # all data
     @property
@@ -680,11 +634,15 @@ class RefMotionLoader:
 
     def reset(self, env_ids: torch.Tensor = None):
         max_start = self.preloaded_s.shape[1] - self.augment_frame_num - 1  # avoid -2+1 confusion
+    
         if env_ids is None:
             self.frame_idx[:] = 0
             self.start_idx[:] = torch.randint(low=0, high=max_start + 1, size=(self.preloaded_s.shape[0],),device=self.start_idx.device)
 
             # weighted sampling of traj indices
+            if not hasattr(self, "traj_weights"):
+                self.traj_weights = torch.ones(self.preloaded_s.shape[0], device=self.preloaded_s.device)
+            
             probs = self.traj_weights / self.traj_weights.sum()
             self.traj_idxs[:] = torch.multinomial(
                 probs, num_samples=self.preloaded_s.shape[0], replacement=True
@@ -692,16 +650,24 @@ class RefMotionLoader:
         else:
             self.frame_idx[env_ids] = 0
             # NOTE, CHECKING THIS LATER
-            #import pdb;pdb.set_trace()
-            #self.start_idx[env_ids] = torch.randint(low=0, high=max_start + 1, size=(len(env_ids),), device=self.start_idx.device)
-            self.start_idx[env_ids] = 0.0 
+            try:
+                if env_ids.dtype == torch.bool:
+                    num_ids = env_ids.sum().item()  # how many True entries
+                else:
+                    num_ids = env_ids.shape[0]
+
+                self.start_idx[env_ids] = torch.randint(low=0, high=max_start + 1, size=(num_ids,), device=self.start_idx.device)
+            except RuntimeError as e:
+                import pdb;pdb.set_trace()
             
             # weighted sampling only for selected envs
             probs = self.traj_weights / self.traj_weights.sum()
             self.traj_idxs[env_ids] = torch.multinomial(
-                probs, num_samples=len(env_ids), replacement=True
+                probs, num_samples=num_ids, replacement=True
             )
 
+        # Initial state
+        self.init_states = self.preloaded_s[self.traj_idxs, self.start_idx, :][:, self.init_state_fields_index]
 
     def sw_quat(self, frame_data):
         # switch root-rot quaternion from xyzw to wxyz
