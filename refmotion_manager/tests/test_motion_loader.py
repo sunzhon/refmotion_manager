@@ -11,29 +11,53 @@ from refmotion_manager.motion_loader import RefMotionLoader
 # load dataset for demonstration
 from test_loader_cfg import ref_motion_cfg
 ref_motion_cfg.time_between_frames=0.02
-ref_motion_cfg.motion_files=glob.glob(os.getenv("HOME")+"/workspace/lumos_ws/humanoid_demo_retarget/sources/data/motions/lus2_joint21/pkl/*fps*")
+ref_motion_cfg.motion_files=glob.glob(os.getenv("HOME")+"/workspace/lumos_ws/humanoid_demo_retarget/sources/data/motions/lus2_joint21/pkl/Mm*_fps30.pkl")
 ref_motion_cfg.device="cuda:0"
-ref_motion_cfg.ref_length_s=5
+ref_motion_cfg.ref_length_s=1.4
 ref_motion = RefMotionLoader(ref_motion_cfg)
 
-
 # Visualize selected data
-#fields = ["root_pos_x", "root_vel_x_w", "left_hip_pitch_joint_dof_pos", "left_hip_pitch_joint_dof_vel","root_vel_y_w", "root_vel_z_w", "root_ang_vel_z_w"]
-fields = ["root_pos_x", "root_pos_y","root_pos_z"]
+fields = ["root_pos_x", "root_vel_x_w", "left_hip_pitch_joint_dof_pos", "left_hip_pitch_joint_dof_vel","root_vel_y_w", "root_vel_z_w", "root_ang_vel_z_w"]
+fields = ref_motion_cfg.expressive_goal_fields[:3]
 # Setup subplots: one row, one subplot per field
 fig, axes = plt.subplots(len(fields), 1, figsize=(10, 12), sharex=True)
 
+frame_start = 0;
+frame_end = 47;
+
 #print(ref_motion.trajectory_fields)
 index = [ref_motion.trajectory_fields.index(key) for key in fields]
-
 for traj_idx in range(len(ref_motion.trajectories)):
-    data = ref_motion.trajectories[traj_idx][10:100, index].cpu().numpy()
+    data = ref_motion.trajectories[traj_idx][frame_start:frame_end, index].cpu().numpy()
     for idx, key in enumerate(fields):
-        axes[idx].plot(data[:, idx], label=f"raw traj {traj_idx} {key}")
+        time = np.linspace(0, (frame_end-frame_start)/30, frame_end - frame_start)
+        axes[idx].plot(time, data[:, idx], label=f"raw traj {traj_idx} {key}")
         axes[idx].set_ylabel(key)
         axes[idx].grid(True)
         axes[idx].legend()
 
 axes[-1].set_xlabel("Frames")
 plt.tight_layout()
+
+
+fig, axes = plt.subplots(len(fields), 1, figsize=(10, 12), sharex=True)
+for traj_idx in range(len(ref_motion.trajectories)):
+    step_data = []
+    frame_end = 100
+    for idx in range (frame_start,frame_end):
+        if idx == ref_motion.preloaded_s.shape[1]-1:
+            ref_motion.reset()
+        ref_motion.step()
+        step_data.append(ref_motion.expressive_goal[:,:3])
+
+    #import pdb;pdb.set_trace()
+    step_data = torch.stack(step_data, dim=0).squeeze().cpu().numpy()  # convert all at once
+
+    for idx, key in enumerate(fields):
+        time = np.linspace(0, 0.02*(frame_end-frame_start), frame_end - frame_start)
+        axes[idx].plot(time, step_data[:, idx], label=f"preload traj {traj_idx} {key}")
+        axes[idx].set_ylabel(key)
+        axes[idx].grid(True)
+        axes[idx].legend()
+
 plt.show()

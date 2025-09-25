@@ -15,8 +15,12 @@ from .utils.pose3d import QuaternionNormalize
 from isaaclab.utils import configclass
 
 # Configure logging
-logger = logging.getLogger("motion_loader")
 
+logging.basicConfig(
+    level=logging.INFO,  # or DEBUG if you want more
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger("motion_loader")
 
 @configclass
 class RefMotionCfg:
@@ -392,14 +396,14 @@ class RefMotionLoader:
     def _setup_goal_indices(self) -> None:
         """Setup indices for goal fields."""
         if self.cfg.style_goal_fields is not None:
-            self.style_goal_index = [
+            self.style_goal_index = torch.tensor([
                 self.trajectory_fields.index(key) for key in self.cfg.style_goal_fields
-            ]
+            ]).to(self.cfg.device)
             
         if self.cfg.expressive_goal_fields is not None:
-            self.expressive_goal_index = [
+            self.expressive_goal_index = torch.tensor([
                 self.trajectory_fields.index(key) for key in self.cfg.expressive_goal_fields
-            ]
+            ]).to(self.cfg.device)
 
     def _setup_style_fields(self) -> None:
         """Setup indices for style fields."""
@@ -639,32 +643,33 @@ class RefMotionLoader:
             self.frame_idx[:] = 0
             self.start_idx[:] = torch.randint(low=0, high=max_start + 1, size=(self.preloaded_s.shape[0],),device=self.start_idx.device)
 
-            # weighted sampling of traj indices
-            if not hasattr(self, "traj_weights"):
-                self.traj_weights = torch.ones(self.preloaded_s.shape[0], device=self.preloaded_s.device)
-            
-            probs = self.traj_weights / self.traj_weights.sum()
-            self.traj_idxs[:] = torch.multinomial(
-                probs, num_samples=self.preloaded_s.shape[0], replacement=True
-            )
+            ## weighted sampling of traj indices
+            #if not hasattr(self, "traj_weights"):
+            #    self.traj_weights = torch.ones(self.preloaded_s.shape[0], device=self.preloaded_s.device)
+            #
+            #probs = self.traj_weights / self.traj_weights.sum()
+            #self.traj_idxs[:] = torch.multinomial(
+            #    probs, num_samples=self.preloaded_s.shape[0], replacement=True
+            #)
         else:
             self.frame_idx[env_ids] = 0
             # NOTE, CHECKING THIS LATER
-            try:
-                if env_ids.dtype == torch.bool:
-                    num_ids = env_ids.sum().item()  # how many True entries
-                else:
-                    num_ids = env_ids.shape[0]
+            #try:
+            #    if env_ids.dtype == torch.bool:
+            #        num_ids = env_ids.sum().item()  # how many True entries
+            #    else:
+            #        num_ids = env_ids.shape[0]
 
-                self.start_idx[env_ids] = torch.randint(low=0, high=max_start + 1, size=(num_ids,), device=self.start_idx.device)
-            except RuntimeError as e:
-                import pdb;pdb.set_trace()
-            
-            # weighted sampling only for selected envs
-            probs = self.traj_weights / self.traj_weights.sum()
-            self.traj_idxs[env_ids] = torch.multinomial(
-                probs, num_samples=num_ids, replacement=True
-            )
+            #    self.start_idx[env_ids] = torch.randint(low=0, high=max_start + 1, size=(num_ids,), device=self.start_idx.device)
+            #    import pdb;pdb.set_trace()
+            #except RuntimeError as e:
+            #    import pdb;pdb.set_trace()
+            #
+            ## weighted sampling only for selected envs
+            #probs = self.traj_weights / self.traj_weights.sum()
+            #self.traj_idxs[env_ids] = torch.multinomial(
+            #    probs, num_samples=num_ids, replacement=True
+            #)
 
         # Initial state
         self.init_states = self.preloaded_s[self.traj_idxs, self.start_idx, :][:, self.init_state_fields_index]
