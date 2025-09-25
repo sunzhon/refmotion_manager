@@ -35,16 +35,16 @@ class RefMotionCfg:
     expressive_link_name: List[str] = MISSING
     
     # Optional parameters with sensible defaults
-    time_between_frames: float = 0.1
+    time_between_frames: float = 0.02
     shuffle: bool = False
     device: str = "cuda:0"
-    trajectory_num: int = 100
+    trajectory_num: int = 1
     ref_length_s: float = 20.0
     frame_begin: int = 0
     frame_end: Optional[int] = None
     style_goal_fields: Optional[List[str]] = None
     random_start: bool = False
-    amp_obs_frame_num: int = 1
+    amp_obs_frame_num: int = 2
     specify_init_values: Optional[Dict[str, float]] = None
 
 
@@ -281,7 +281,7 @@ class RefMotionLoader:
         
         # Calculate reference length
         if self.cfg.ref_length_s is None:
-            self.cfg.ref_length_s = float(min(self.trajectory_durations))
+            self.cfg.ref_length_s = float(min(self.trajectory_durations)*min(self.trajectory_num_frames))
             
         self.augment_frame_num = int(self.cfg.ref_length_s / self.cfg.time_between_frames)
         
@@ -294,10 +294,11 @@ class RefMotionLoader:
         
         # Sample trajectories and times
         traj_idxs = self.weighted_traj_idx_sample_batch(size=self.cfg.trajectory_num)
+        import pdb;pdb.set_trace()
         
         # Preallocate tensor
         B, T = self.cfg.trajectory_num, self.augment_frame_num + self.cfg.amp_obs_frame_num
-        D = self.get_frame_at_time(0, 0).shape[0]
+        D = self.get_frame_at_time(0, 0).shape[0] # feilds number
         
         preloaded_s = torch.empty((B, T, D), dtype=torch.float32, device=self.cfg.device)
         
@@ -437,12 +438,6 @@ class RefMotionLoader:
         # Implementation depends on your sampling strategy
         return list(range(min(size, len(self.trajectories))))
 
-    def traj_time_sample_batch(self, traj_idx: int, size: int) -> List[float]:
-        """Sample times from a trajectory."""
-        # Implementation depends on your sampling strategy
-        duration = self.trajectory_durations[traj_idx]
-        return np.linspace(0, duration, size).tolist()
-
 
     def _blend_frame_pose(self, frame1: np.ndarray, frame2: np.ndarray, blend: float) -> np.ndarray:
         """Blend between two frames."""
@@ -461,21 +456,71 @@ class RefMotionLoader:
         return np.random.choice(self.trajectory_idxs, p=self.trajectory_weights)
 
 
-    def traj_time_sample_batch(self, traj_idx, size):
-        """Sample random time for multiple trajectories."""
-        subst = (self.cfg.time_between_frames + self.trajectory_frame_durations[traj_idx])  # frame period
+
+    def traj_time_sample_batch(self, traj_idx: int, size: int) -> np.ndarray:
+        """
+        Sample time points from a trajectory for batch processing.
+        
+        Args:
+            traj_idx: Index of the trajectory to sample from
+            size: Number of time samples to generate
+            
+        Returns:
+            Array of sampled time points within the trajectory duration
+            
+        Raises:
+            ValueError: If traj_idx is out of bounds or size is invalid
+        """
+        # Input validation
+        if not 0 <= traj_idx < len(self.trajectories):
+            raise ValueError(f"traj_idx {traj_idx} out of range [0, {len(self.trajectories)-1}]")
+        
+        if size <= 0:
+            raise ValueError(f"Sample size must be positive, got {size}")
+        
+        # Get trajectory metadata
+        traj_duration = self.trajectory_durations[traj_idx]
+        frame_duration = self.trajectory_frame_durations[traj_idx]
+        total_frames = self.trajectories[traj_idx].shape[0]
+        
+        # Calculate safe time range (avoid sampling beyond valid frames)
+        safe_time_margin = self.cfg.time_between_frames + frame_duration
+        max_safe_time = traj_duration - safe_time_margin
+        
+        if max_safe_time <= 0:
+            raise ValueError(f"Trajectory {traj_idx} too short ({traj_duration:.3f}s) "
+                            f"for sampling with frame duration {frame_duration:.3f}s")
+        
         if self.cfg.shuffle:
-            time_samples = (self.trajectory_durations[traj_idx] * np.random.uniform(size=int(size))- subst)
+            # Random uniform sampling across the entire trajectory
+            time_samples = np.random.uniform(low=0.0, high=max_safe_time, size=size)
         else:
+            # Sequential sampling with optional random start
             if self.cfg.random_start:
-                #NOTE: data frame num must be large than 2*num_steps_per_env
-                random_start_threshold = 1-size/(1+self.trajectories[traj_idx].shape[0])
-                start_time = np.random.uniform(high = random_start_threshold, size=1)*self.trajectory_durations[traj_idx]
+                # Ensure we have enough frames for the requested sample size
+                min_required_frames = size + 1  # +1 for safety margin
+                if total_frames < min_required_frames:
+                    raise ValueError(f"Trajectory {traj_idx} has only {total_frames} frames, "
+                                   f"but {min_required_frames} required for random_start sampling")
+                
+                # Calculate maximum start time that allows complete sampling
+                max_start_time = traj_duration - (size * self.cfg.time_between_frames)
+                max_start_time = max(0.0, max_start_time - safe_time_margin)
+                
+                start_time = np.random.uniform(low=0.0, high=max_start_time)
             else:
                 start_time = 0.0
-            time_samples = start_time + np.arange(0, size * self.cfg.time_between_frames, self.cfg.time_between_frames)[:size]
-            time_samples = np.minimum(time_samples, self.trajectory_durations[traj_idx]-subst)
+            
+            # Generate sequential time points
+            time_samples = start_time + np.arange(size) * self.cfg.time_between_frames
+            
+            # Ensure samples don't exceed safe bounds
+            time_samples = np.clip(time_samples, 0.0, max_safe_time)
+        
         return time_samples
+
+
+
 
     def slerp(self, val0, val1, blend):
         """Spherical linear interpolation."""
@@ -485,7 +530,7 @@ class RefMotionLoader:
     def get_frame_at_time(self, traj_idx: int, time: float) -> torch.Tensor:
         """Get frame at specific time from trajectory"""
         p = (float(time) / self.trajectory_durations[traj_idx])  # percentage of the time on the trajectory
-        n = self.trajectories[traj_idx].shape[0]  # number of traj_idx trajectory
+        n = self.trajectories[traj_idx].shape[0]  # frame number of traj_idx trajectory
         idx_low, idx_high = int(np.floor(p * n)), int(np.ceil(p * n))
         frame_begin = self.trajectories[traj_idx][idx_low]
         frame_end = self.trajectories[traj_idx][idx_high]
