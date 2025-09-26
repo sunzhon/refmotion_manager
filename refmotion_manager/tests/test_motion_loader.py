@@ -13,7 +13,8 @@ from test_loader_cfg import ref_motion_cfg
 ref_motion_cfg.time_between_frames=0.02
 ref_motion_cfg.motion_files=glob.glob(os.getenv("HOME")+"/workspace/lumos_ws/humanoid_demo_retarget/sources/data/motions/lus2_joint21/pkl/Mm*_fps30.pkl")
 ref_motion_cfg.device="cuda:0"
-ref_motion_cfg.ref_length_s=1.4
+ref_motion_cfg.ref_length_s=0.8
+ref_motion_cfg.clip_num = 5
 ref_motion = RefMotionLoader(ref_motion_cfg)
 
 # Visualize selected data
@@ -41,21 +42,21 @@ plt.tight_layout()
 
 
 fig, axes = plt.subplots(len(fields), 1, figsize=(10, 12), sharex=True)
-for traj_idx in range(len(ref_motion.trajectories)):
+for clip_idx in range(len(ref_motion.clip_idxs)):
+    frame_num = int(ref_motion_cfg.ref_length_s/0.02)
     step_data = []
-    frame_end = 100
-    for idx in range (frame_start,frame_end):
-        if idx == ref_motion.preloaded_s.shape[1]-1:
+    for idx in range (frame_num):
+        if idx == ref_motion.preloaded_s.shape[1]-3:
             ref_motion.reset()
         ref_motion.step()
-        step_data.append(ref_motion.expressive_goal[:,:3])
+        step_data.append(ref_motion.expressive_goal[clip_idx,:3])
 
     #import pdb;pdb.set_trace()
     step_data = torch.stack(step_data, dim=0).squeeze().cpu().numpy()  # convert all at once
 
     for idx, key in enumerate(fields):
-        time = np.linspace(0, 0.02*(frame_end-frame_start), frame_end - frame_start)
-        axes[idx].plot(time, step_data[:, idx], label=f"preload traj {traj_idx} {key}")
+        time = np.linspace(0, ref_motion_cfg.ref_length_s, frame_num)
+        axes[idx].plot(time, step_data[:, idx], label=f"preload traj {clip_idx} {key}")
         axes[idx].set_ylabel(key)
         axes[idx].grid(True)
         axes[idx].legend()

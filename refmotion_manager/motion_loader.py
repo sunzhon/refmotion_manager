@@ -38,7 +38,7 @@ class RefMotionCfg:
     time_between_frames: float = 0.02
     shuffle: bool = False
     device: str = "cuda:0"
-    trajectory_num: int = 1
+    clip_num: int = 1
     ref_length_s: float = 20.0
     frame_begin: int = 0
     frame_end: Optional[int] = None
@@ -74,6 +74,7 @@ class RefMotionLoader:
         self._load_trajectories()
         self._preload_reference_motions()
         self._setup_field_indices()
+        self._init_amp_ref_obs()
         self._log_initialization_summary()
 
     def _validate_config(self, cfg: RefMotionCfg) -> None:
@@ -124,7 +125,7 @@ class RefMotionLoader:
         self.trajectory_durations = []  # Trajectory length in seconds
         self.trajectory_weights = []
         self.trajectory_frame_durations = []  # Duration per frame
-        self.trajectory_num_frames = []
+        self.clip_num_frames = []
         
         # Field information
         self.trajectory_fields = None
@@ -259,7 +260,7 @@ class RefMotionLoader:
         
         traj_len = (motion_tensor.shape[0] - 1) * frame_duration
         self.trajectory_durations.append(traj_len)
-        self.trajectory_num_frames.append(motion_tensor.shape[0])
+        self.clip_num_frames.append(motion_tensor.shape[0])
         
         logger.info(f"Trajectory duration: {traj_len:.2f}s")
 
@@ -273,7 +274,7 @@ class RefMotionLoader:
             self.trajectory_weights = np.array(self.trajectory_weights)
             self.trajectory_frame_durations = np.array(self.trajectory_frame_durations)
             self.trajectory_durations = np.array(self.trajectory_durations)
-            self.trajectory_num_frames = np.array(self.trajectory_num_frames)
+            self.clip_num_frames = np.array(self.clip_num_frames)
 
     def _preload_reference_motions(self) -> None:
         """Preload reference motion sequences for efficient sampling."""
@@ -281,37 +282,46 @@ class RefMotionLoader:
         
         # Calculate reference length
         if self.cfg.ref_length_s is None:
-            self.cfg.ref_length_s = float(min(self.trajectory_durations)*min(self.trajectory_num_frames))
+            self.cfg.ref_length_s = float(min(self.trajectory_durations)*min(self.clip_num_frames))
             
         self.augment_frame_num = int(self.cfg.ref_length_s / self.cfg.time_between_frames)
         
         # Set trajectory number
-        if self.cfg.trajectory_num is None:
-            self.cfg.trajectory_num = len(self.trajectories)
+        if self.cfg.clip_num is None:
+            self.cfg.clip_num = len(self.trajectories)
             
-        logger.info(f"Preloading {self.cfg.trajectory_num} trajectories with "
+        logger.info(f"Preloading {self.cfg.clip_num} trajectories with "
                    f"{self.augment_frame_num} frames each")
         
         # Sample trajectories and times
-        traj_idxs = self.weighted_traj_idx_sample_batch(size=self.cfg.trajectory_num)
-        import pdb;pdb.set_trace()
+        traj_idxs = self.weighted_traj_idx_sample_batch(size=self.cfg.clip_num)
+
         
         # Preallocate tensor
-        B, T = self.cfg.trajectory_num, self.augment_frame_num + self.cfg.amp_obs_frame_num
+        B, T = self.cfg.clip_num, self.augment_frame_num + self.cfg.amp_obs_frame_num
         D = self.get_frame_at_time(0, 0).shape[0] # feilds number
         
-        preloaded_s = torch.empty((B, T, D), dtype=torch.float32, device=self.cfg.device)
+        self.preloaded_s = torch.empty((B, T, D), dtype=torch.float32, device=self.cfg.device)
         
         # Fill preloaded tensor
         for i, traj_idx in enumerate(traj_idxs):
             times = self.traj_time_sample_batch(traj_idx, size=T)
             for j, frame_time in enumerate(times):
-                preloaded_s[i, j] = self.get_frame_at_time(traj_idx, frame_time)
+                self.preloaded_s[i, j] = self.get_frame_at_time(traj_idx, frame_time)
         
         #self.preloaded_s = preloaded_s.requires_grad_(False)
-        self.preloaded_s = preloaded_s
+
+
         logger.info(f"Preloaded tensor shape: {self.preloaded_s.shape} "
                    f"on device: {self.preloaded_s.device}")
+
+
+
+    def _init_amp_ref_obs(self) -> None:
+        self.abs_frame_idx = self.start_idx + self.frame_idx
+        self.amp_expert = self.preloaded_s[
+                self.clip_idxs, 
+                self.abs_frame_idx][:,self.style_field_index].repeat(1,2)
 
     def _setup_field_indices(self) -> None:
         """Setup indices for different field types."""
@@ -414,29 +424,36 @@ class RefMotionLoader:
 
     def _initialize_sampling_indices(self) -> None:
         """Initialize indices for trajectory sampling."""
-        self.frame_idx = torch.zeros(self.cfg.trajectory_num, 
+        self.frame_idx = torch.zeros(self.cfg.clip_num, 
                                    device=self.cfg.device, 
                                    dtype=torch.long).requires_grad_(False)
-        self.start_idx = torch.zeros(self.cfg.trajectory_num,
+        self.start_idx = torch.zeros(self.cfg.clip_num,
                                    device=self.cfg.device,
                                    dtype=torch.long).requires_grad_(False)
-        self.traj_idxs = torch.arange(self.preloaded_s.shape[0],
+        self.clip_idxs = torch.arange(self.preloaded_s.shape[0],
                                     device=self.preloaded_s.device).requires_grad_(False)
 
     def _log_initialization_summary(self) -> None:
         """Log summary information after initialization."""
         logger.info("Reference Motion Loader initialization complete")
-        logger.info(f"Preloaded tensor dimensions: {len(self.preloaded_s)} trajectories, "
+        logger.info(f"Preloaded tensor dimensions: {len(self.preloaded_s)} clips, "
                    f"each with {self.preloaded_s[0].shape} frames")
         logger.info(f"Augment frame number: {self.augment_frame_num}, "
                    f"AMP observation frames: {self.cfg.amp_obs_frame_num}")
         logger.info(f"Total trajectories loaded: {len(self.trajectory_idxs)}")
 
-    # Placeholder methods - these should be implemented based on your specific needs
-    def weighted_traj_idx_sample_batch(self, size: int) -> List[int]:
-        """Sample trajectory indices based on weights."""
-        # Implementation depends on your sampling strategy
-        return list(range(min(size, len(self.trajectories))))
+
+    def weighted_traj_idx_sample_batch(self, size: int):
+        """Batch sample traj idxs."""
+        if self.cfg.shuffle:
+            return np.random.choice(
+                self.trajectory_idxs, size=size, p=self.trajectory_weights, replace=True
+            )
+        else:
+            repeated_array = np.tile(
+                self.trajectory_idxs, (size // len(self.trajectory_idxs)) + 1
+            )
+            return repeated_array[:size]
 
 
     def _blend_frame_pose(self, frame1: np.ndarray, frame2: np.ndarray, blend: float) -> np.ndarray:
@@ -583,17 +600,13 @@ class RefMotionLoader:
         """Generates a batch of AMP transitions."""
         # Define trajectory indices and frame positions
         self.abs_frame_idx = self.start_idx + self.frame_idx
-    
         # I) AMP observation
-        amp_seq = [
-            self.preloaded_s[
-                self.traj_idxs[i], 
-                self.abs_frame_idx[i] : self.abs_frame_idx[i] + self.cfg.amp_obs_frame_num, 
-                self.style_field_index
-            ].reshape(1, -1) 
-            for i in range(len(self.traj_idxs))
-        ]
-        self.amp_expert = torch.cat(amp_seq, dim=0)
+        try:
+            amp_seq = [self.preloaded_s[self.clip_idxs, self.abs_frame_idx+i,:][:,self.style_field_index]  for i in range(self.cfg.amp_obs_frame_num)]
+        except Exception as e:
+            import pdb;pdb.set_trace()
+        
+        self.amp_expert = torch.cat(amp_seq, dim=-1)
     
         # II) Goal (next frame data)
         self.next_frame_idx = self.abs_frame_idx + 1
@@ -605,80 +618,80 @@ class RefMotionLoader:
     @property
     def data(self):
         """Root position in world frame at current frame"""
-        return self.preloaded_s[self.traj_idxs, self.abs_frame_idx]
+        return self.preloaded_s[self.clip_idxs, self.abs_frame_idx]
 
     # Root state properties
     @property
     def root_pos_w(self):
         """Root position in world frame at current frame"""
-        if not hasattr(self, 'traj_idxs') or not hasattr(self, 'abs_frame_idx'):
+        if not hasattr(self, 'clip_idxs') or not hasattr(self, 'abs_frame_idx'):
             raise RuntimeError("Must call step() before accessing root_pos_w")
-        return self.preloaded_s[self.traj_idxs, self.abs_frame_idx][:, self.root_pos_index]
+        return self.preloaded_s[self.clip_idxs, self.abs_frame_idx][:, self.root_pos_index]
     
     @property
     def root_quat_w(self):
         """Root quaternion in world frame at current frame"""
-        if not hasattr(self, 'traj_idxs') or not hasattr(self, 'abs_frame_idx'):
+        if not hasattr(self, 'clip_idxs') or not hasattr(self, 'abs_frame_idx'):
             raise RuntimeError("Must call step() before accessing root_quat_w")
-        return self.preloaded_s[self.traj_idxs, self.abs_frame_idx][:, self.root_quat_index]
+        return self.preloaded_s[self.clip_idxs, self.abs_frame_idx][:, self.root_quat_index]
     
     @property
     def root_lin_vel_w(self):
         """Root linear velocity in world frame at current frame"""
-        if not hasattr(self, 'traj_idxs') or not hasattr(self, 'abs_frame_idx'):
+        if not hasattr(self, 'clip_idxs') or not hasattr(self, 'abs_frame_idx'):
             raise RuntimeError("Must call step() before accessing root_lin_vel_w")
-        return self.preloaded_s[self.traj_idxs, self.abs_frame_idx][:, self.root_lin_vel_index_w]
+        return self.preloaded_s[self.clip_idxs, self.abs_frame_idx][:, self.root_lin_vel_index_w]
     
     @property
     def root_ang_vel_w(self):
         """Root angular velocity in world frame at current frame"""
-        if not hasattr(self, 'traj_idxs') or not hasattr(self, 'abs_frame_idx'):
+        if not hasattr(self, 'clip_idxs') or not hasattr(self, 'abs_frame_idx'):
             raise RuntimeError("Must call step() before accessing root_ang_vel_w")
-        return self.preloaded_s[self.traj_idxs, self.abs_frame_idx][:, self.root_ang_vel_index_w]
+        return self.preloaded_s[self.clip_idxs, self.abs_frame_idx][:, self.root_ang_vel_index_w]
     
     @property
     def root_lin_vel_b(self):
         """Root linear velocity in body frame at current frame"""
-        if not hasattr(self, 'traj_idxs') or not hasattr(self, 'abs_frame_idx'):
+        if not hasattr(self, 'clip_idxs') or not hasattr(self, 'abs_frame_idx'):
             raise RuntimeError("Must call step() before accessing root_lin_vel_b")
-        return self.preloaded_s[self.traj_idxs, self.abs_frame_idx][:, self.root_lin_vel_index_b]
+        return self.preloaded_s[self.clip_idxs, self.abs_frame_idx][:, self.root_lin_vel_index_b]
     
     @property
     def root_ang_vel_b(self):
         """Root angular velocity in body frame at current frame"""
-        if not hasattr(self, 'traj_idxs') or not hasattr(self, 'abs_frame_idx'):
+        if not hasattr(self, 'clip_idxs') or not hasattr(self, 'abs_frame_idx'):
             raise RuntimeError("Must call step() before accessing root_ang_vel_b")
-        return self.preloaded_s[self.traj_idxs, self.abs_frame_idx][:, self.root_ang_vel_index_b]
+        return self.preloaded_s[self.clip_idxs, self.abs_frame_idx][:, self.root_ang_vel_index_b]
     
     # Goal/Target properties (next frame data)
     @property
     def base_velocity_w(self):
         """Base velocity in world frame for next frame (goal)"""
-        return self.preloaded_s[self.traj_idxs, self.next_frame_idx][:, self.base_velocity_index_w]
+        return self.preloaded_s[self.clip_idxs, self.next_frame_idx][:, self.base_velocity_index_w]
     
     @property
     def base_velocity_b(self):
         """Base velocity in body frame for next frame (goal)"""
-        return self.preloaded_s[self.traj_idxs, self.next_frame_idx][:, self.base_velocity_index_b]
+        return self.preloaded_s[self.clip_idxs, self.next_frame_idx][:, self.base_velocity_index_b]
 
     @property
     def base_velocity(self):
         """Base velocity in body frame for next frame (goal)"""
-        return self.preloaded_s[self.traj_idxs, self.next_frame_idx][:, self.base_velocity_index]
+        return self.preloaded_s[self.clip_idxs, self.next_frame_idx][:, self.base_velocity_index]
     
     @property
     def style_goal(self):
         """Style goal for next frame"""
         if self.cfg.style_goal_fields is None:
             return None
-        return self.preloaded_s[self.traj_idxs, self.next_frame_idx][:, self.style_goal_index]
+        return self.preloaded_s[self.clip_idxs, self.next_frame_idx][:, self.style_goal_index]
     
     @property
     def expressive_goal(self):
         """Expressive goal for next frame"""
         if self.cfg.expressive_goal_fields is None:
             return None
-        return self.preloaded_s[self.traj_idxs, self.next_frame_idx][:, self.expressive_goal_index]
+        return self.preloaded_s[self.clip_idxs, self.next_frame_idx][:, self.expressive_goal_index]
 
 
     def reset(self, env_ids: torch.Tensor = None):
@@ -693,7 +706,7 @@ class RefMotionLoader:
             #    self.traj_weights = torch.ones(self.preloaded_s.shape[0], device=self.preloaded_s.device)
             #
             #probs = self.traj_weights / self.traj_weights.sum()
-            #self.traj_idxs[:] = torch.multinomial(
+            #self.clip_idxs[:] = torch.multinomial(
             #    probs, num_samples=self.preloaded_s.shape[0], replacement=True
             #)
         else:
@@ -712,12 +725,12 @@ class RefMotionLoader:
             #
             ## weighted sampling only for selected envs
             #probs = self.traj_weights / self.traj_weights.sum()
-            #self.traj_idxs[env_ids] = torch.multinomial(
+            #self.clip_idxs[env_ids] = torch.multinomial(
             #    probs, num_samples=num_ids, replacement=True
             #)
 
         # Initial state
-        self.init_states = self.preloaded_s[self.traj_idxs, self.start_idx, :][:, self.init_state_fields_index]
+        self.init_states = self.preloaded_s[self.clip_idxs, self.start_idx, :][:, self.init_state_fields_index]
 
     def sw_quat(self, frame_data):
         # switch root-rot quaternion from xyzw to wxyz

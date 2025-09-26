@@ -137,7 +137,7 @@ ref_motion_cfg = RefMotionCfg(
         random_start=random_start,
         amp_obs_frame_num=amp_obs_frame_num, #-1+1,
         ref_length_s=episode_length_s, # 20 s
-        trajectory_num=num_envs,
+        clip_num=num_envs,
         frame_begin=None,
         frame_end=None,
 )
