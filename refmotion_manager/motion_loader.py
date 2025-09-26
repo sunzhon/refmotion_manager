@@ -39,6 +39,7 @@ class RefMotionCfg:
     shuffle: bool = False
     device: str = "cuda:0"
     clip_num: int = 1
+    trajectory_num: Optional[int] = None # Depresse this parameter in the future, please use clip_num
     ref_length_s: float = 20.0
     frame_begin: int = 0
     frame_end: Optional[int] = None
@@ -282,13 +283,17 @@ class RefMotionLoader:
         
         # Calculate reference length
         if self.cfg.ref_length_s is None:
-            self.cfg.ref_length_s = float(min(self.trajectory_durations)*min(self.clip_num_frames))
+            self.cfg.ref_length_s = float(min(self.trajectory_durations))
             
         self.augment_frame_num = int(self.cfg.ref_length_s / self.cfg.time_between_frames)
         
         # Set trajectory number
         if self.cfg.clip_num is None:
             self.cfg.clip_num = len(self.trajectories)
+
+        if self.cfg.trajectory_num is not None:
+            self.cfg.clip_num = self.cfg.trajectory_num
+            logger.warn("Depression trajectory_num in the future, please use clip_num")
             
         logger.info(f"Preloading {self.cfg.clip_num} trajectories with "
                    f"{self.augment_frame_num} frames each")
@@ -498,7 +503,6 @@ class RefMotionLoader:
         # Get trajectory metadata
         traj_duration = self.trajectory_durations[traj_idx]
         frame_duration = self.trajectory_frame_durations[traj_idx]
-        total_frames = self.trajectories[traj_idx].shape[0]
         
         # Calculate safe time range (avoid sampling beyond valid frames)
         safe_time_margin = self.cfg.time_between_frames + frame_duration
@@ -514,12 +518,6 @@ class RefMotionLoader:
         else:
             # Sequential sampling with optional random start
             if self.cfg.random_start:
-                # Ensure we have enough frames for the requested sample size
-                min_required_frames = size + 1  # +1 for safety margin
-                if total_frames < min_required_frames:
-                    raise ValueError(f"Trajectory {traj_idx} has only {total_frames} frames, "
-                                   f"but {min_required_frames} required for random_start sampling")
-                
                 # Calculate maximum start time that allows complete sampling
                 max_start_time = traj_duration - (size * self.cfg.time_between_frames)
                 max_start_time = max(0.0, max_start_time - safe_time_margin)
@@ -605,6 +603,10 @@ class RefMotionLoader:
             amp_seq = [self.preloaded_s[self.clip_idxs, self.abs_frame_idx+i,:][:,self.style_field_index]  for i in range(self.cfg.amp_obs_frame_num)]
         except Exception as e:
             import pdb;pdb.set_trace()
+
+        # for the first step, the amp_ref, its current states and next states should be same
+        amp_seq[1][self.frame_idx==0,:] = amp_seq[0][self.frame_idx==0,:]
+        #import pdb;pdb.set_trace()
         
         self.amp_expert = torch.cat(amp_seq, dim=-1)
     

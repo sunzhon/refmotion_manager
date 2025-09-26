@@ -45,14 +45,18 @@ fig, axes = plt.subplots(len(fields), 1, figsize=(10, 12), sharex=True)
 for clip_idx in range(len(ref_motion.clip_idxs)):
     frame_num = int(ref_motion_cfg.ref_length_s/0.02)
     step_data = []
+    amp_ref = []
     for idx in range (frame_num):
-        if idx == ref_motion.preloaded_s.shape[1]-3:
-            ref_motion.reset()
         ref_motion.step()
         step_data.append(ref_motion.expressive_goal[clip_idx,:3])
+        amp_ref.append(ref_motion.amp_expert[clip_idx,:])
+        if idx == ref_motion.preloaded_s.shape[1]-3:
+            ref_motion.reset()
 
     #import pdb;pdb.set_trace()
     step_data = torch.stack(step_data, dim=0).squeeze().cpu().numpy()  # convert all at once
+
+    amp_ref = torch.stack(amp_ref,dim=0).squeeze().cpu().numpy()
 
     for idx, key in enumerate(fields):
         time = np.linspace(0, ref_motion_cfg.ref_length_s, frame_num)
@@ -60,5 +64,22 @@ for clip_idx in range(len(ref_motion.clip_idxs)):
         axes[idx].set_ylabel(key)
         axes[idx].grid(True)
         axes[idx].legend()
+
+
+
+# plot amp ref
+fields = ref_motion_cfg.style_fields[:2]
+fig, axes = plt.subplots(len(fields), 1, figsize=(10, 12), sharex=True)
+for clip_idx in range(len(ref_motion.clip_idxs)):
+    frame_num = int(ref_motion_cfg.ref_length_s/0.02)
+    for idx, key in enumerate(fields):
+        time = np.linspace(0, ref_motion_cfg.ref_length_s, frame_num)
+        axes[idx].plot(time, amp_ref[:, idx], label=f"current states of preload traj {clip_idx} {key}")
+        axes[idx].plot(time, amp_ref[:, idx+21], label=f"next states of preload traj {clip_idx} {key}")
+        axes[idx].set_ylabel(key)
+        axes[idx].grid(True)
+        axes[idx].legend()
+
+
 
 plt.show()
