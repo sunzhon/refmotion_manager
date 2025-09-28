@@ -126,7 +126,7 @@ class RefMotionLoader:
         self.trajectory_durations = []  # Trajectory length in seconds
         self.trajectory_weights = []
         self.trajectory_frame_durations = []  # Duration per frame
-        self.clip_num_frames = []
+        self.trajectory_frame_num = []
         
         # Field information
         self.trajectory_fields = None
@@ -261,7 +261,7 @@ class RefMotionLoader:
         
         traj_len = (motion_tensor.shape[0] - 1) * frame_duration
         self.trajectory_durations.append(traj_len)
-        self.clip_num_frames.append(motion_tensor.shape[0])
+        self.trajectory_frame_num.append(motion_tensor.shape[0])
         
         logger.info(f"Trajectory duration: {traj_len:.2f}s")
 
@@ -275,7 +275,7 @@ class RefMotionLoader:
             self.trajectory_weights = np.array(self.trajectory_weights)
             self.trajectory_frame_durations = np.array(self.trajectory_frame_durations)
             self.trajectory_durations = np.array(self.trajectory_durations)
-            self.clip_num_frames = np.array(self.clip_num_frames)
+            self.trajectory_frame_num = np.array(self.trajectory_frame_num)
 
     def _preload_reference_motions(self) -> None:
         """Preload reference motion sequences for efficient sampling."""
@@ -284,8 +284,12 @@ class RefMotionLoader:
         # Calculate reference length
         if self.cfg.ref_length_s is None:
             self.cfg.ref_length_s = float(min(self.trajectory_durations))
+
+        self.cfg.ref_length_s = min(float(min(self.trajectory_durations)), self.cfg.ref_length_s)
             
-        self.augment_frame_num = int(self.cfg.ref_length_s / self.cfg.time_between_frames)
+        self.clip_frame_num = int(self.cfg.ref_length_s / self.cfg.time_between_frames)
+        logger.warn("Will depression augment_frame_num in the future, please use clip_frame_num")
+        self.augment_frame_num = self.clip_frame_num 
         
         # Set trajectory number
         if self.cfg.clip_num is None:
@@ -296,14 +300,14 @@ class RefMotionLoader:
             logger.warn("Depression trajectory_num in the future, please use clip_num")
             
         logger.info(f"Preloading {self.cfg.clip_num} trajectories with "
-                   f"{self.augment_frame_num} frames each")
+                   f"{self.clip_frame_num} frames each")
         
         # Sample trajectories and times
         traj_idxs = self.weighted_traj_idx_sample_batch(size=self.cfg.clip_num)
 
         
         # Preallocate tensor
-        B, T = self.cfg.clip_num, self.augment_frame_num + self.cfg.amp_obs_frame_num
+        B, T = self.cfg.clip_num, self.clip_frame_num + self.cfg.amp_obs_frame_num
         D = self.get_frame_at_time(0, 0).shape[0] # feilds number
         
         self.preloaded_s = torch.empty((B, T, D), dtype=torch.float32, device=self.cfg.device)
@@ -323,7 +327,7 @@ class RefMotionLoader:
 
 
     def _init_amp_ref_obs(self) -> None:
-        self.abs_frame_idx = self.start_idx + self.frame_idx
+        self.abs_frame_idx = self.start_idx
         self.amp_expert = self.preloaded_s[
                 self.clip_idxs, 
                 self.abs_frame_idx][:,self.style_field_index].repeat(1,2)
@@ -441,9 +445,10 @@ class RefMotionLoader:
     def _log_initialization_summary(self) -> None:
         """Log summary information after initialization."""
         logger.info("Reference Motion Loader initialization complete")
+        logger.info(f"Trajectory frame num: {self.trajectory_frame_num}")
         logger.info(f"Preloaded tensor dimensions: {len(self.preloaded_s)} clips, "
                    f"each with {self.preloaded_s[0].shape} frames")
-        logger.info(f"Augment frame number: {self.augment_frame_num}, "
+        logger.info(f"Augment frame number: {self.clip_frame_num}, "
                    f"AMP observation frames: {self.cfg.amp_obs_frame_num}")
         logger.info(f"Total trajectories loaded: {len(self.trajectory_idxs)}")
 
@@ -697,11 +702,11 @@ class RefMotionLoader:
 
 
     def reset(self, env_ids: torch.Tensor = None):
-        max_start = self.preloaded_s.shape[1] - self.augment_frame_num - 1  # avoid -2+1 confusion
+        #max_start = self.preloaded_s.shape[1] - self.clip_frame_num - 1  # avoid -2+1 confusion
     
         if env_ids is None:
             self.frame_idx[:] = 0
-            self.start_idx[:] = torch.randint(low=0, high=max_start + 1, size=(self.preloaded_s.shape[0],),device=self.start_idx.device)
+            ##self.start_idx[:] = torch.randint(low=0, high=max_start + 1, size=(self.preloaded_s.shape[0],),device=self.start_idx.device)
 
             ## weighted sampling of traj indices
             #if not hasattr(self, "traj_weights"):
