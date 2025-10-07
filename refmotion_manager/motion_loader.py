@@ -175,8 +175,6 @@ class RefMotionLoader:
         
         # Convert to tensor and store
         motion_tensor = torch.tensor(motion_data, dtype=torch.float32, device=self.cfg.device)
-        if str(self.cfg.device) != 'cpu':
-            motion_tensor = motion_tensor.to(self.cfg.device)
             
         self.trajectories.append(motion_tensor)
         self._store_trajectory_metadata(motion_json, motion_tensor, file_idx, frame_duration)
@@ -259,7 +257,7 @@ class RefMotionLoader:
         self.trajectory_weights.append(float(motion_json.get("MotionWeight", 1.0)))
         self.trajectory_frame_durations.append(frame_duration)
         
-        traj_len = (motion_tensor.shape[0] - 1) * frame_duration
+        traj_len = motion_tensor.shape[0] * frame_duration
         self.trajectory_durations.append(traj_len)
         self.trajectory_frame_num.append(motion_tensor.shape[0])
         
