@@ -1,0 +1,3 @@
+[submodule "refmotion_manager/assets/lumos_assets"]
+	path = refmotion_manager/assets/lumos_assets
+	url = https://github.com/LumosRobot/lumos_assets.git

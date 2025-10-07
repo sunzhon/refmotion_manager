@@ -1,0 +1,3 @@
+amass_root: ./assets
+data_folder: datasets/Mma_Kick_with_lastframe_repeat48_fps30.pkl
+model_folder: lumos_assets/lus2/mjcf/lus2_joint21.xml

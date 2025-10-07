@@ -58,22 +58,26 @@ def key_call_back( keycode):
     
     
 
-
 @hydra.main(version_base=None, config_path="./cfg", config_name="config")
 def main(cfg : DictConfig) -> None:
     #1) loading ref traj by refmotion_manager
     # load dataset for demonstration
-    #ref_motion_cfg = RefMotionCfg()
     from tests.test_loader_cfg import ref_motion_cfg
-    ref_motion_cfg.time_between_frames=0.02
-    ref_motion_cfg.motion_files=glob.glob(os.getenv("HOME")+"/workspace/lumos_ws/humanoid_demo_retarget/sources/data/motions/lus2_joint21/pkl/Mm*_fps30.pkl")
+    ref_motion_cfg.time_between_frames = 0.02
+    asset_root = cfg.get("amass_root",None)
+    import pdb;pdb.set_trace()
+    ref_motion_cfg.motion_files= glob.glob(os.path.join(asset_root, cfg.get("data_folder",None)))
+    #ref_motion_cfg.motion_files=glob.glob(os.getenv("HOME")+"/workspace/lumos_ws/humanoid_demo_retarget/sources/data/motions/lus2_joint21/pkl/Mm*_fps30.pkl")
     ref_motion_cfg.device="cpu"
     ref_motion_cfg.ref_length_s=None
     ref_motion_cfg.clip_num = 1
     ref_motion = RefMotionLoader(ref_motion_cfg)
+    
+    #-) or gettting ref traj from a real-time motion capture system
 
     #2) build robot model
-    humanoid_xml = os.getenv("HOME")+"/workspace/lumos_ws/lumos_rl_gym/resources/robots/lus2/mjcf/lus2_joint21.xml"
+    humanoid_xml = os.path.join(asset_root, cfg.get("model_folder",None))
+    #humanoid_xml = os.getenv("HOME")+"/workspace/lumos_ws/lumos_rl_gym/resources/robots/lus2/mjcf/lus2_joint21.xml"
     logger.info(f"humanoid xlm is {humanoid_xml}")
     mj_model = mujoco.MjModel.from_xml_path(humanoid_xml)
     mj_data = mujoco.MjData(mj_model)
