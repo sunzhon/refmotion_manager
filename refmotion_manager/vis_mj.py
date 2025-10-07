@@ -65,7 +65,6 @@ def main(cfg : DictConfig) -> None:
     from tests.test_loader_cfg import ref_motion_cfg
     ref_motion_cfg.time_between_frames = 0.02
     asset_root = cfg.get("amass_root",None)
-    import pdb;pdb.set_trace()
     ref_motion_cfg.motion_files= glob.glob(os.path.join(asset_root, cfg.get("data_folder",None)))
     #ref_motion_cfg.motion_files=glob.glob(os.getenv("HOME")+"/workspace/lumos_ws/humanoid_demo_retarget/sources/data/motions/lus2_joint21/pkl/Mm*_fps30.pkl")
     ref_motion_cfg.device="cpu"
