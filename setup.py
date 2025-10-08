@@ -24,6 +24,7 @@ setup(
     python_requires=">=3.8",
     install_requires=[
          "pybullet",
+         "mujoco==3.3.6",
          "torch"
     ],
 )
