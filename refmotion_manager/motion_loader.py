@@ -257,9 +257,15 @@ class RefMotionLoader:
         self.trajectory_weights.append(float(motion_json.get("MotionWeight", 1.0)))
         self.trajectory_frame_durations.append(frame_duration)
         
-        traj_len = motion_tensor.shape[0] * frame_duration
+        traj_len = (motion_tensor.shape[0]-1) * frame_duration
         self.trajectory_durations.append(traj_len)
         self.trajectory_frame_num.append(motion_tensor.shape[0])
+
+        # Convert to numpy arrays for efficient sampling
+        self.trajectory_weights = np.array(self.trajectory_weights)
+        self.trajectory_frame_durations = np.array(self.trajectory_frame_durations)
+        self.trajectory_durations = np.array(self.trajectory_durations)
+        self.trajectory_frame_num = np.array(self.trajectory_frame_num)
         
         logger.info(f"Trajectory duration: {traj_len:.2f}s")
 
@@ -269,11 +275,6 @@ class RefMotionLoader:
             total_weight = sum(self.trajectory_weights)
             self.trajectory_weights = [w / total_weight for w in self.trajectory_weights]
             
-            # Convert to numpy arrays for efficient sampling
-            self.trajectory_weights = np.array(self.trajectory_weights)
-            self.trajectory_frame_durations = np.array(self.trajectory_frame_durations)
-            self.trajectory_durations = np.array(self.trajectory_durations)
-            self.trajectory_frame_num = np.array(self.trajectory_frame_num)
 
     def _preload_reference_motions(self) -> None:
         """Preload reference motion sequences for efficient sampling."""
@@ -538,23 +539,20 @@ class RefMotionLoader:
         return time_samples
 
 
-
-
-    def slerp(self, val0, val1, blend):
+    def _lerp(self, val0, val1, blend):
         """Spherical linear interpolation."""
         return (1.0 - blend) * val0 + blend * val1
 
 
     def get_frame_at_time(self, traj_idx: int, time: float) -> torch.Tensor:
         """Get frame at specific time from trajectory"""
-        p = (float(time) / self.trajectory_durations[traj_idx])  # percentage of the time on the trajectory
-        n = self.trajectories[traj_idx].shape[0]  # frame number of traj_idx trajectory
-        idx_low, idx_high = int(np.floor(p * n)), int(np.ceil(p * n))
-        frame_begin = self.trajectories[traj_idx][idx_low]
-        frame_end = self.trajectories[traj_idx][idx_high]
-        blend = p * n - idx_low
-        # return self.slerp(frame_begin, frame_end, blend)
-        return self.blend_frame_pose(frame_begin, frame_end, blend)
+        phase = (float(time) / self.trajectory_durations[traj_idx])  # percentage of the time on the trajectory
+        n = self.trajectories[traj_idx].shape[0]-1  # frame number of traj_idx trajectory
+        idx_low, idx_high = int(np.floor(phase * n)), int(np.ceil(phase * n))
+        frame_0 = self.trajectories[traj_idx][idx_low]
+        frame_1 = self.trajectories[traj_idx][idx_high]
+        blend = phase * n - idx_low
+        return self.blend_frame_pose(frame_0, frame_1, blend)
 
 
     def blend_frame_pose(self, frame0, frame1, blend):
@@ -571,7 +569,7 @@ class RefMotionLoader:
 
         """
         if "root_rot" not in self.trajectory_fields:
-            blend_fd = self.slerp(frame0, frame1, blend)
+            blend_fd = self._lerp(frame0, frame1, blend)
         else:
             # Define the field names for the dataset.
             root_rot_index = [self.trajectory_fields.index("root_rot_" + key) for key in ["x", "y", "z", "w"]]
@@ -586,7 +584,7 @@ class RefMotionLoader:
             )
             rot_blend_fd = motion_util.standardize_quaternion(rot_blend_fd)
 
-            other_blend_fd = self.slerp(
+            other_blend_fd = self._lerp(
                 frame0[other_field_index], frame1[other_field_index], blend
             )
 
@@ -602,10 +600,10 @@ class RefMotionLoader:
         # Define trajectory indices and frame positions
         self.abs_frame_idx = self.start_idx + self.frame_idx
         # I) AMP observation
-        try:
-            amp_seq = [self.preloaded_s[self.clip_idxs, self.abs_frame_idx+i,:][:,self.style_field_index]  for i in range(self.cfg.amp_obs_frame_num)]
-        except Exception as e:
-            import pdb;pdb.set_trace()
+        #try:
+        amp_seq = [self.preloaded_s[self.clip_idxs, self.abs_frame_idx+i,:][:,self.style_field_index]  for i in range(self.cfg.amp_obs_frame_num)]
+        #except Exception as e:
+        #    import pdb;pdb.set_trace()
 
         # for the first step, the amp_ref, its current states and next states should be same
         amp_seq[1][self.frame_idx==0,:] = amp_seq[0][self.frame_idx==0,:]

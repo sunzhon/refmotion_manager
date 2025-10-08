@@ -66,7 +66,7 @@ def main(cfg : DictConfig) -> None:
     ref_motion_cfg.time_between_frames = 0.02
     asset_root = cfg.get("amass_root",None)
     ref_motion_cfg.motion_files= glob.glob(os.path.join(asset_root, cfg.get("data_folder",None)))
-    #ref_motion_cfg.motion_files=glob.glob(os.getenv("HOME")+"/workspace/lumos_ws/humanoid_demo_retarget/sources/data/motions/lus2_joint21/pkl/Mm*_fps30.pkl")
+    ref_motion_cfg.motion_files=glob.glob(os.getenv("HOME")+"/workspace/lumos_ws/humanoid_demo_retarget/sources/data/motions/lus2_joint21/pkl/Sh*_fps30.pkl")
     ref_motion_cfg.device="cpu"
     ref_motion_cfg.ref_length_s=None
     ref_motion_cfg.clip_num = 1
