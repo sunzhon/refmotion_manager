@@ -30,9 +30,10 @@ class RefMotionCfg:
     motion_files: str = MISSING
     init_state_fields: List[str] = MISSING
     style_fields: List[str] = MISSING
+    style_goal_fields: Optional[List[str]] = None
     expressive_goal_fields: List[str] = MISSING
-    expressive_joint_name: List[str] = MISSING
-    expressive_link_name: List[str] = MISSING
+    #expressive_joint_name: List[str] = MISSING
+    #expressive_link_name: List[str] = MISSING
     
     # Optional parameters with sensible defaults
     time_between_frames: float = 0.02
@@ -43,7 +44,6 @@ class RefMotionCfg:
     ref_length_s: float = 20.0
     frame_begin: int = 0
     frame_end: Optional[int] = None
-    style_goal_fields: Optional[List[str]] = None
     random_start: bool = False
     amp_obs_frame_num: int = 2
     specify_init_values: Optional[Dict[str, float]] = None
