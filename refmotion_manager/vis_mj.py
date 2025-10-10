@@ -62,7 +62,7 @@ def key_call_back( keycode):
 def main(cfg : DictConfig) -> None:
     #1) loading ref traj by refmotion_manager
     # load dataset for demonstration
-    from tests.test_loader_cfg import ref_motion_cfg
+    from refmotion_manager.tests.test_loader_cfg import ref_motion_cfg
     ref_motion_cfg.time_between_frames = 0.02
     asset_root = cfg.get("amass_root",None)
     ref_motion_cfg.motion_files= glob.glob(os.path.join(asset_root, cfg.get("data_folder",None)))
