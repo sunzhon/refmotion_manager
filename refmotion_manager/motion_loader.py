@@ -35,12 +35,12 @@ class RefMotionCfg:
     motion_files: str = MISSING
     init_state_fields: List[str] = MISSING
     style_fields: List[str] = MISSING
-    style_goal_fields: Optional[List[str]] = None
     expressive_goal_fields: List[str] = MISSING
     #expressive_joint_name: List[str] = MISSING
     #expressive_link_name: List[str] = MISSING
     
     # Optional parameters with sensible defaults
+    style_goal_fields: Optional[List[str]] = None
     time_between_frames: float = 0.02
     shuffle: bool = False
     device: str = "cuda:0"
