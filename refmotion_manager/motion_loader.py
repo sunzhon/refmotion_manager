@@ -12,8 +12,13 @@ from pybullet_utils import transformations
 
 from .utils import motion_util
 from .utils.pose3d import QuaternionNormalize
-from isaaclab.utils import configclass
 
+try:
+    from isaaclab.utils import configclass
+except ImportError:
+    from dataclasses import dataclass, field
+    configclass=dataclass
+ 
 # Configure logging
 
 logging.basicConfig(
