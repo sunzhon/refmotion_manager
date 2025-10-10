@@ -1,5 +1,3 @@
-# loading packages
-import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import os,json,glob
@@ -120,5 +118,5 @@ for traj_idx in range(len(ref_motion.trajectories)):
 axes[-1].set_xlabel("Frames")
 plt.tight_layout()
 
-
 plt.show()
+
