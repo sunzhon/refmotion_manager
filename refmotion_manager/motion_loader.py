@@ -261,11 +261,6 @@ class RefMotionLoader:
         self.trajectory_durations.append(traj_len)
         self.trajectory_frame_num.append(motion_tensor.shape[0])
 
-        # Convert to numpy arrays for efficient sampling
-        self.trajectory_weights = np.array(self.trajectory_weights)
-        self.trajectory_frame_durations = np.array(self.trajectory_frame_durations)
-        self.trajectory_durations = np.array(self.trajectory_durations)
-        self.trajectory_frame_num = np.array(self.trajectory_frame_num)
         
         logger.info(f"Trajectory duration: {traj_len:.2f}s")
 
@@ -443,6 +438,12 @@ class RefMotionLoader:
 
     def _log_initialization_summary(self) -> None:
         """Log summary information after initialization."""
+        # Convert to numpy arrays for efficient sampling
+        self.trajectory_weights = np.array(self.trajectory_weights)
+        self.trajectory_frame_durations = np.array(self.trajectory_frame_durations)
+        self.trajectory_durations = np.array(self.trajectory_durations)
+        self.trajectory_frame_num = np.array(self.trajectory_frame_num)
+
         logger.info("Reference Motion Loader initialization complete")
         logger.info(f"Trajectory frame num: {self.trajectory_frame_num}")
         logger.info(f"Preloaded tensor dimensions: {len(self.preloaded_s)} clips, "
