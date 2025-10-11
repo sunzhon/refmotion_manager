@@ -18,7 +18,6 @@ from scipy.spatial.transform import Rotation as sRot
 import joblib
 import hydra
 from omegaconf import DictConfig, OmegaConf
-import hydra
 from refmotion_manager.motion_loader import RefMotionLoader, RefMotionCfg
 
 # Configure the logging system
@@ -64,9 +63,11 @@ def main(cfg : DictConfig) -> None:
     # load dataset for demonstration
     from refmotion_manager.tests.test_loader_cfg import ref_motion_cfg
     ref_motion_cfg.time_between_frames = 0.02
-    asset_root = cfg.get("amass_root",None)
-    ref_motion_cfg.motion_files= glob.glob(os.path.join(asset_root, cfg.get("data_folder",None)))
-    ref_motion_cfg.motion_files=glob.glob(os.getenv("HOME")+"/workspace/lumos_ws/humanoid_demo_retarget/sources/data/motions/lus2_joint21/pkl/Sh*_fps30.pkl")
+
+    dataset = cfg.get("dataset",None)
+    motion_files = "./"+os.path.join(dataset.folder, dataset.file)
+    print(motion_files)
+    ref_motion_cfg.motion_files= glob.glob(motion_files)
     ref_motion_cfg.device="cpu"
     ref_motion_cfg.ref_length_s=None
     ref_motion_cfg.clip_num = 1
@@ -75,8 +76,8 @@ def main(cfg : DictConfig) -> None:
     #-) or gettting ref traj from a real-time motion capture system
 
     #2) build robot model
-    humanoid_xml = os.path.join(asset_root, cfg.get("model_folder",None))
-    #humanoid_xml = os.getenv("HOME")+"/workspace/lumos_ws/lumos_rl_gym/resources/robots/lus2/mjcf/lus2_joint21.xml"
+    asset = cfg.get("asset",None)
+    humanoid_xml = os.path.join(asset.root, asset.urdf)
     logger.info(f"humanoid xlm is {humanoid_xml}")
     mj_model = mujoco.MjModel.from_xml_path(humanoid_xml)
     mj_data = mujoco.MjData(mj_model)

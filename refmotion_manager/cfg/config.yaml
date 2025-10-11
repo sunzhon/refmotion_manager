@@ -1,3 +1,8 @@
-amass_root: ./assets
-data_folder: datasets/Mma_Kick_with_lastframe_repeat48_fps30.pkl
-model_folder: lumos_assets/lus2/mjcf/lus2_joint21.xml
+asset:
+  root: ./assets
+  xml: lumos_assets/lus2/mjcf/lus2_joint21.xml
+  urdf: lumos_assets/lus2/urdf/lus2_joint21.urdf
+
+dataset:
+  folder: /../../motions/lus2_joint21/pkl
+  file: Mma_Kick_with_lastframe_repeat48_fps30.pkl
