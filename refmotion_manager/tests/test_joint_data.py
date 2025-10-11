@@ -329,16 +329,13 @@ def calculate_trajectory_plausibility(pos_stats, vel_stats):
         
         if total_violation > 0:
             # Exponential penalty for violations
-            violation_ratio = total_violation / (pos_range * 0.1)  # Normalize by 10% of range
-            penalty = min(50, 50 * (1 - np.exp(-violation_ratio * 5)))
-            score = 50 - penalty
-            violation_details.append(f"{joint_name}: pos violation {total_violation:.3f}rad (penalty: {penalty:.1f})")
+            violation_ratio = total_violation / pos_range  # Normalize by 10% of range
+            score = 1 - violation_ratio
         else:
-            score = 50
-            violation_details.append(f"{joint_name}: pos OK")
+            score = 1
         
         total_score += score
-        max_score += 50
+        max_score += 1
     
     # Velocity plausibility (50% weight)
     for stat in vel_stats:
@@ -353,16 +350,13 @@ def calculate_trajectory_plausibility(pos_stats, vel_stats):
         
         if total_violation > 0:
             # Exponential penalty for velocity violations
-            violation_ratio = total_violation / (vel_limit * 0.2)  # Normalize by 20% of limit
-            penalty = min(50, 50 * (1 - np.exp(-violation_ratio * 3)))
-            score = 50 - penalty
-            violation_details.append(f"{joint_name}: vel violation {total_violation:.3f}rad/s (penalty: {penalty:.1f})")
+            violation_ratio = total_violation / vel_limit  # Normalize by 20% of limit
+            score = 1 - violation_ratio
         else:
-            score = 50
-            violation_details.append(f"{joint_name}: vel OK")
+            score = 1
         
         total_score += score
-        max_score += 50
+        max_score += 1
     
     if max_score > 0:
         plausibility_score = (total_score / max_score) * 100
