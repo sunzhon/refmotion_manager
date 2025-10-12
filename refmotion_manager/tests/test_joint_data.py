@@ -271,7 +271,7 @@ class JointDataVisualizer:
 
 
         # Calculate trajectory plausibility
-        plausibility_score, violation_details = calculate_trajectory_plausibility(pos_stats, vel_stats)
+        plausibility_score = calculate_trajectory_plausibility(pos_data, pos_stats, vel_data, vel_stats)
         rating, emoji = get_plausibility_rating(plausibility_score)
 
         # Print trajectory plausibility conclusion
@@ -307,7 +307,7 @@ class JointDataVisualizer:
         #plt.savefig(stats_save_path, dpi=300, bbox_inches='tight')
 
 
-def calculate_trajectory_plausibility(pos_stats, vel_stats):
+def calculate_trajectory_plausibility(pos_data, pos_stats, vel_data, vel_stats):
     """
     Calculate trajectory plausibility metric (0-100)
     Higher score = more physically plausible
@@ -315,56 +315,24 @@ def calculate_trajectory_plausibility(pos_stats, vel_stats):
     total_score = 0
     max_score = 0
     violation_details = []
-    
-    # Position plausibility (50% weight)
-    for stat in pos_stats:
-        joint_name = stat['Joint'].replace('_joint_dof_pos', '')
-        pos_range = stat['Limit_Max'] - stat['Limit_Min']
-        
-        # Check lower limit violation
-        lower_violation = max(0, stat['Limit_Min'] - stat['Min'])
-        upper_violation = max(0, stat['Max'] - stat['Limit_Max'])
-        
-        total_violation = lower_violation + upper_violation
-        
-        if total_violation > 0:
-            # Exponential penalty for violations
-            violation_ratio = total_violation / pos_range  # Normalize by 10% of range
-            score = 1 - violation_ratio
-        else:
-            score = 1
-        
-        total_score += score
-        max_score += 1
-    
-    # Velocity plausibility (50% weight)
-    for stat in vel_stats:
-        joint_name = stat['Joint'].replace('_joint_dof_vel', '')
-        vel_limit = stat['Limit_Max']
-        
-        # Check velocity limit violations
-        lower_violation = max(0, -stat['Limit_Min'] - (-stat['Min']))  # Handle negative limits
-        upper_violation = max(0, stat['Max'] - stat['Limit_Max'])
-        
-        total_violation = lower_violation + upper_violation
-        
-        if total_violation > 0:
-            # Exponential penalty for velocity violations
-            violation_ratio = total_violation / vel_limit  # Normalize by 20% of limit
-            score = 1 - violation_ratio
-        else:
-            score = 1
-        
-        total_score += score
-        max_score += 1
-    
-    if max_score > 0:
-        plausibility_score = (total_score / max_score) * 100
-    else:
-        plausibility_score = 100
 
+    pos_violation_area = 0
+    vel_violation_area = 0
+
+    for i, stats in enumerate(pos_stats):
+        pos_violation_area += np.mean(np.clip(pos_data[:,i] - stats["Limit_Max"], 0.0, None))
+        pos_violation_area += np.mean(np.clip(stats["Limit_Min"] - pos_data[:,i], 0.0, None))
+
+    for i, stats in enumerate(vel_stats):
+        vel_violation_area += np.mean(np.clip( vel_data[:,i] - stats["Limit_Max"], 0.0, None))
+        vel_violation_area += np.mean(np.clip( stats["Limit_Min"]- vel_data[:,i], 0.0, None))
     
-    return plausibility_score, violation_details
+
+    violation = 0.9*pos_violation_area + 1.1*vel_violation_area
+
+    score = (1-violation) * 100
+
+    return score
 
 
 def get_plausibility_rating(score):
