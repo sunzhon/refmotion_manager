@@ -27,6 +27,7 @@ class JointDataVisualizer:
         
         # Create figures directory
         self.figs_dir = self._create_figs_directory()
+        self.data_file = os.path.basename(self.cfg.motion_files[0])[:-4]
         
         # Set seaborn style
         sns.set_theme(style="whitegrid")
@@ -137,7 +138,7 @@ class JointDataVisualizer:
         plt.tight_layout()
         
         # Save position plot
-        pos_save_path = os.path.join(self.figs_dir, "all_joints_positions_subplots.png")
+        pos_save_path = os.path.join(self.figs_dir, self.data_file+ "_all_joints_positions_subplots.png")
         plt.savefig(pos_save_path, dpi=300, bbox_inches='tight')
         
         # Create subplots for velocities
@@ -180,7 +181,7 @@ class JointDataVisualizer:
         plt.tight_layout()
         
         # Save velocity plot
-        vel_save_path = os.path.join(self.figs_dir, "all_joints_velocities_subplots.png")
+        vel_save_path = os.path.join(self.figs_dir, self.data_file+"_all_joints_velocities_subplots.png")
         plt.savefig(vel_save_path, dpi=300, bbox_inches='tight')
         
         print(f"Saved position plot: {pos_save_path}")
@@ -278,9 +279,11 @@ class JointDataVisualizer:
         print("\n" + "="*80)
         print("TRAJECTORY PLAUSIBILITY ASSESSMENT")
         print("="*80)
+        print(f"Data File: {self.data_file}")
         print(f"{emoji} Overall Plausibility Score: {plausibility_score:.1f}/100 - {rating}")
-        print("\nViolation Details:")
         print("-" * 40)
+        print(f"Please check {self.figs_dir} for details")
+        print("="*80)
         
         #pos_df = pd.DataFrame(pos_stats)
         #vel_df = pd.DataFrame(vel_stats)
