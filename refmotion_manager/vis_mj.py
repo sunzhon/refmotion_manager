@@ -77,7 +77,7 @@ def main(cfg : DictConfig) -> None:
 
     #2) build robot model
     asset = cfg.get("asset",None)
-    humanoid_xml = os.path.join(asset.root, asset.urdf)
+    humanoid_xml = os.path.join(asset.root, asset.xml)
     logger.info(f"humanoid xlm is {humanoid_xml}")
     mj_model = mujoco.MjModel.from_xml_path(humanoid_xml)
     mj_data = mujoco.MjData(mj_model)
