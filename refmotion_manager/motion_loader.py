@@ -314,6 +314,7 @@ class RefMotionLoader:
 
     def _init_ref_obs(self) -> None:
         self.abs_frame_idx = self.start_idx
+        self.next_frame_idx = self.abs_frame_idx + 1
         if self.cfg.style_fields:
             self.amp_expert = self.preloaded_s[self.abs_frame_idx][:,self.style_field_index].repeat(1,2)
 
@@ -428,9 +429,10 @@ class RefMotionLoader:
         self.frame_idx = torch.zeros(self.cfg.clip_num, 
                                    device=self.cfg.device, 
                                    dtype=torch.long).requires_grad_(False)
-        self.start_idx = torch.zeros(self.cfg.clip_num,
-                                   device=self.cfg.device,
-                                   dtype=torch.long).requires_grad_(False)
+        max_start = self.preloaded_s.shape[0] - self.clip_frame_num - 1  # avoid -2+1 confusion
+        self.start_idx = torch.randint(low=0, high=max_start, size=(self.cfg.clip_num,), device=self.cfg.device).requires_grad_(False)
+        self.init_states = self.preloaded_s[self.start_idx][:, self.init_state_fields_index]
+
 
     def _log_initialization_summary(self) -> None:
         """Log summary information after initialization."""
@@ -591,7 +593,7 @@ class RefMotionLoader:
         # I) AMP observation
         #try:
         if self.cfg.style_fields:
-            amp_seq = [self.preloaded_s[self.abs_frame_idx+i,:][:,self.style_field_index]  for i in range(self.cfg.amp_obs_frame_num)]
+            amp_seq = [self.preloaded_s[self.abs_frame_idx+i, :][:,self.style_field_index]  for i in range(self.cfg.amp_obs_frame_num)]
             # for the first step, the amp_ref, its current states and next states should be same
             amp_seq[1][self.frame_idx==0,:] = amp_seq[0][self.frame_idx==0,:]
             self.amp_expert = torch.cat(amp_seq, dim=-1)
@@ -673,12 +675,9 @@ class RefMotionLoader:
 
 
     def reset(self, env_ids: torch.Tensor = None):
-        #max_start = self.preloaded_s.shape[1] - self.clip_frame_num - 1  # avoid -2+1 confusion
     
         if env_ids is None:
             self.frame_idx[:] = 0
-            ##self.start_idx[:] = torch.randint(low=0, high=max_start + 1, size=(self.preloaded_s.shape[0],),device=self.start_idx.device)
-
             ## weighted sampling of traj indices
             #if not hasattr(self, "traj_weights"):
             #    self.traj_weights = torch.ones(self.preloaded_s.shape[0], device=self.preloaded_s.device)
@@ -707,8 +706,6 @@ class RefMotionLoader:
             #    probs, num_samples=num_ids, replacement=True
             #)
 
-        # Initial state
-        self.init_states = self.preloaded_s[self.start_idx][:, self.init_state_fields_index]
 
     def sw_quat(self, frame_data):
         # switch root-rot quaternion from xyzw to wxyz
