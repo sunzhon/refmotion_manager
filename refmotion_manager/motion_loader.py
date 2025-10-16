@@ -429,7 +429,7 @@ class RefMotionLoader:
         self.frame_idx = torch.zeros(self.cfg.clip_num, 
                                    device=self.cfg.device, 
                                    dtype=torch.long).requires_grad_(False)
-        max_start = self.preloaded_s.shape[0] - self.clip_frame_num - 1  # avoid -2+1 confusion
+        max_start = max(1, self.preloaded_s.shape[0] - self.clip_frame_num - 1)  # avoid -2+1 confusion
         self.start_idx = torch.randint(low=0, high=max_start, size=(self.cfg.clip_num,), device=self.cfg.device).requires_grad_(False)
         self.init_states = self.preloaded_s[self.start_idx][:, self.init_state_fields_index]
 
