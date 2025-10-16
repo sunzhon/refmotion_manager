@@ -279,9 +279,9 @@ class RefMotionLoader:
         
         # Calculate reference length
         if self.cfg.ref_length_s is None:
-            self.cfg.ref_length_s = float(min(self.trajectory_durations))
+            self.cfg.ref_length_s = float(sum(self.trajectory_durations) - 3*self.cfg.time_between_frames)
 
-        self.cfg.ref_length_s = min(float(min(self.trajectory_durations)), self.cfg.ref_length_s)
+        self.cfg.ref_length_s = min(float(sum(self.trajectory_durations)), self.cfg.ref_length_s)
             
         self.clip_frame_num = int(self.cfg.ref_length_s / self.cfg.time_between_frames)
         logger.warn("Will depression augment_frame_num in the future, please use clip_frame_num")
