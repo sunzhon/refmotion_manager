@@ -1,8 +1,8 @@
 asset:
-  root: ./assets
-  xml: lumos_assets/lus2/mjcf/lus2_joint21.xml
-  urdf: lumos_assets/lus2/urdf/lus2_joint21.urdf
+  root: ./../../
+  xml: lumos_assets/nix1/mjcf/nix1_joint21.xml
+  urdf: lumos_assets/nix1/urdf/nix1_joint21.urdf
 
 dataset:
-  folder: /../../motions/lus2_joint21/pkl
+  folder: /../../motions/nix1_joint21/pkl
   file: Mma_Kick_with_lastframe_repeat48_fps30.pkl
