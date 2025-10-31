@@ -62,7 +62,7 @@ def main(cfg : DictConfig) -> None:
     #1) loading ref traj by refmotion_manager
     # load dataset for demonstration
     from refmotion_manager.tests.test_loader_cfg import ref_motion_cfg
-    ref_motion_cfg.time_between_frames = 0.02
+    ref_motion_cfg.time_between_frames = 0.008
 
     dataset = cfg.get("dataset",None)
     motion_files = "./"+os.path.join(dataset.folder, dataset.file)
@@ -84,7 +84,7 @@ def main(cfg : DictConfig) -> None:
     joint_names = [mj_model.joint(i).name for i in range(1, mj_model.njnt)]
 
     #3) cfg 
-    dt = 0.02
+    dt = ref_motion_cfg.time_between_frames
     root_fields= ["root_pos_x","root_pos_y", "root_pos_z","root_rot_w","root_rot_x","root_rot_y","root_rot_z"]
     joint_dof_fields = [key+"_dof_pos" for key in joint_names]
     data_fields = root_fields + joint_dof_fields
@@ -114,7 +114,7 @@ def main(cfg : DictConfig) -> None:
             mujoco.mj_forward(mj_model, mj_data)
             ref_motion.step()
 
-            if ref_motion.frame_idx > ref_motion.clip_frame_num:
+            if ref_motion.frame_idx > ref_motion.clip_frame_num-4:
                 ref_motion.reset()
                 logger.info(f"Reset")
 

@@ -444,9 +444,9 @@ class RefMotionLoader:
 
         logger.info("Reference Motion Loader initialization complete")
         logger.info(f"Trajectory frame num: {self.trajectory_frame_num}")
-        logger.info(f"Preloaded tensor dimensions: {len(self.preloaded_s)} clips, "
+        logger.info(f"Preloaded tensor (self.preloaed_s) dimensions: {len(self.preloaded_s)} clips, "
                    f"each with {self.preloaded_s[0].shape} frames")
-        logger.info(f"Augment frame number: {self.clip_frame_num}, "
+        logger.info(f"Augment frame number (self.clip_frame_num): {self.clip_frame_num}, "
                    f"AMP observation frames: {self.cfg.amp_obs_frame_num}")
         logger.info(f"Total trajectories loaded: {len(self.trajectory_idxs)}")
 
@@ -495,7 +495,7 @@ class RefMotionLoader:
         
         # Calculate safe time range (avoid sampling beyond valid frames)
         safe_time_margin = self.cfg.time_between_frames + frame_duration
-        max_safe_time = traj_duration - safe_time_margin
+        max_safe_time = traj_duration #- safe_time_margin
 
         
         if max_safe_time <= 0:
@@ -506,7 +506,6 @@ class RefMotionLoader:
             size = int(max_safe_time/self.cfg.time_between_frames) # max size of the traj_idx
         if size <= 0:
             raise ValueError(f"Sample size must be positive, got {size}")
-
 
         if self.cfg.shuffle:
             # Random uniform sampling across the entire trajectory
