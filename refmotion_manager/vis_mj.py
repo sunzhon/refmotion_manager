@@ -66,7 +66,7 @@ def main(cfg : DictConfig) -> None:
 
     dataset = cfg.get("dataset",None)
     motion_files = "./"+os.path.join(dataset.folder, dataset.file)
-    print(motion_files)
+    logger.info(f"motion file is {motion_files}")
     ref_motion_cfg.motion_files= glob.glob(motion_files)
     ref_motion_cfg.device="cpu"
     ref_motion_cfg.ref_length_s=None
@@ -91,7 +91,7 @@ def main(cfg : DictConfig) -> None:
     print(f" data fields : {data_fields}")
     index = [ref_motion.trajectory_fields.index(key) for key in data_fields]
 
-    robot_bodies = ["left_elbow_link", "right_elbow_link","left_hip_pitch_link","right_hip_pitch_link","left_shoulder_roll_link","right_shoulder_roll_link","left_ankle_roll_link","right_ankle_roll_link", "left_knee_link", "right_knee_link"] #"left_wrist_roll_link","right_wrist_roll_link"]
+    robot_bodies = ["pelvis","left_elbow_link", "right_elbow_link","left_hip_pitch_link","right_hip_pitch_link","left_shoulder_roll_link","right_shoulder_roll_link","left_ankle_roll_link","right_ankle_roll_link", "left_knee_link", "right_knee_link"] #"left_wrist_roll_link","right_wrist_roll_link"]
     body_index = [[ref_motion.trajectory_fields.index(key + kk) for kk in ["_pos_x_w", "_pos_y_w", "_pos_z_w"]] for key in robot_bodies]
     print(f" body index : {body_index}")
 
