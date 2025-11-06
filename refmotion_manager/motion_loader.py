@@ -137,7 +137,7 @@ class RefMotionLoader:
         """Load and process all motion trajectories."""
         logger.info(f"Loading {len(self.cfg.motion_files)} motion files")
         
-        for file_idx, motion_file in enumerate(self.cfg.motion_files):
+        for file_idx, motion_file in enumerate(glob.glob(self.cfg.motion_files)):
             logger.info(f"Processing motion file {file_idx + 1}/{len(self.cfg.motion_files)}: {motion_file}")
             self._process_motion_file(motion_file, file_idx)
         
