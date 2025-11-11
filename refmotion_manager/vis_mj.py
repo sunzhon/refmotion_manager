@@ -67,7 +67,7 @@ def main(cfg : DictConfig) -> None:
     dataset = cfg.get("dataset",None)
     motion_files = "./"+os.path.join(dataset.folder, dataset.file)
     logger.info(f"motion file is {motion_files}")
-    ref_motion_cfg.motion_files= glob.glob(motion_files)
+    ref_motion_cfg.motion_files= motion_files
     ref_motion_cfg.device="cpu"
     ref_motion_cfg.ref_length_s=None
     ref_motion_cfg.clip_num = 1
