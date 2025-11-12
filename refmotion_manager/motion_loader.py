@@ -36,8 +36,6 @@ class RefMotionCfg:
     init_state_fields: List[str] = MISSING
     style_fields: List[str] = None
     expressive_goal_fields: List[str] = None
-    #expressive_joint_name: List[str] = MISSING
-    #expressive_link_name: List[str] = MISSING
     
     # Optional parameters with sensible defaults
     style_goal_fields: Optional[List[str]] = None
@@ -52,6 +50,7 @@ class RefMotionCfg:
     random_start: bool = False
     amp_obs_frame_num: int = 2
     specify_init_values: Optional[Dict[str, float]] = None
+    specify_final_values: Optional[Dict[str, float]] = None
 
 
 class RefMotionLoader:
@@ -215,40 +214,63 @@ class RefMotionLoader:
 
     def _add_transition_frames(self, motion_data: np.ndarray, motion_json: Dict) -> np.ndarray:
         """Add transition frames for initialization if specified."""
-        if self.cfg.specify_init_values is None:
+
+        if not (self.cfg.specify_init_values or self.cfg.specify_final_values):
             return motion_data
-            
-        logger.info("Adding transition frames for specified initial values")
+
         head_tail_time_s = 2.0  # seconds
         frame_duration = float(motion_json["FrameDuration"])
         head_tail_frame_num = int(head_tail_time_s / frame_duration)
         
-        first_frame = motion_data[0, :].copy()
-        last_frame = motion_data[-1, :].copy()
-        init_frame = first_frame.copy()
-        
-        # Apply initial values
-        for key, value in self.cfg.specify_init_values.items():
-            init_frame[self.trajectory_fields.index(key)] = value
-        
         # Create transition frames
         head_transition_frames = []
         tail_transition_frames = []
+
+        # Handle initial values transition
+        if self.cfg.specify_init_values is not None:
+            logger.info("Adding transition frames for specified initial values")
+           
+            first_frame = motion_data[0, :].copy()
+            init_frame = first_frame.copy()
+
+            # Apply initial values
+            for key, value in self.cfg.specify_init_values.items():
+                init_frame[self.trajectory_fields.index(key)] = value
+
+            for idx in range(head_tail_frame_num):
+                blend = float(idx / head_tail_frame_num)
+                head_transition_frames.append(self.blend_frame_pose(init_frame, first_frame, blend))
         
-        for idx in range(head_tail_frame_num):
-            blend = float(idx / head_tail_frame_num)
-            head_transition_frames.append(self._blend_frame_pose(init_frame, first_frame, blend))
-            tail_transition_frames.append(self._blend_frame_pose(last_frame, init_frame, blend))
+        # Handle final value transition
+        if self.cfg.specify_final_values is not None:
+            logger.info("Adding transition frames for specified final values")
+            
+            last_frame = motion_data[-1, :].copy()
+            final_frame = last_frame.copy()
+
+            # Apply final values
+            for key, value in self.cfg.specify_final_values.items():
+                final_frame[self.trajectory_fields.index(key)] = value
         
-        # Combine all frames
-        enhanced_data = np.vstack([
-            np.array(head_transition_frames),
-            motion_data,
-            np.array(tail_transition_frames)
-        ])
+            for idx in range(head_tail_frame_num):
+                blend = float(idx / head_tail_frame_num)
+                tail_transition_frames.append(self.blend_frame_pose(last_frame, final_frame, blend))
         
-        logger.info(f"Added {2 * head_tail_frame_num} transition frames. "
-                   f"New shape: {enhanced_data.shape}")
+        # Combine all frames (with safety checks)
+        frames_to_stack = []
+        
+        if head_transition_frames:
+            frames_to_stack.append(np.array(head_transition_frames))
+        
+        frames_to_stack.append(motion_data)
+        
+        if tail_transition_frames:
+            frames_to_stack.append(np.array(tail_transition_frames))
+        
+        enhanced_data = np.vstack(frames_to_stack)
+        
+        added_frames = len(head_transition_frames) + len(tail_transition_frames)
+        logger.info(f"Added {added_frames} transition frames. New shape: {enhanced_data.shape}")
         
         return enhanced_data
 
@@ -441,20 +463,14 @@ class RefMotionLoader:
         self.trajectory_frame_durations = np.array(self.trajectory_frame_durations)
         self.trajectory_durations = np.array(self.trajectory_durations)
         self.trajectory_frame_num = np.array(self.trajectory_frame_num)
-
+        
         logger.info("Reference Motion Loader initialization complete")
         logger.info(f"Trajectory frame num: {self.trajectory_frame_num}")
-        logger.info(f"Preloaded tensor (self.preloaed_s) dimensions: {len(self.preloaded_s)} clips, "
-                   f"each with {self.preloaded_s[0].shape} frames")
+        logger.info(f"Preloaded tensor (self.preloaed_s) dimensions: {self.preloaded_s.shape} ")
         logger.info(f"Augment frame number (self.clip_frame_num): {self.clip_frame_num}, "
                    f"AMP observation frames: {self.cfg.amp_obs_frame_num}")
         logger.info(f"Total trajectories loaded: {len(self.trajectory_idxs)}")
 
-
-    def _blend_frame_pose(self, frame1: np.ndarray, frame2: np.ndarray, blend: float) -> np.ndarray:
-        """Blend between two frames."""
-        # Implementation depends on your blending strategy
-        return frame1 * (1 - blend) + frame2 * blend
 
     @property
     def trajectory_num(self) -> int:
