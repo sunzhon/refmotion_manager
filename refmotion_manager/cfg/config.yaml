@@ -1,8 +1,8 @@
 robot_type: nix1_v2_joint21
 asset:
   root: ./../../lumos_assets/
-  xml: nix1/mjcf/${robot_type}.xml
-  urdf: nix1/urdf/${robot_type}.urdf
+  xml: ${robot_type}/mjcf/${robot_type}.xml
+  urdf: ${robot_type}/urdf/${robot_type}.urdf
 
 dataset:
   folder: /../../motions/${robot_type}/pkl
