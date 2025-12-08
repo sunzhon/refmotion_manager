@@ -73,7 +73,6 @@ def main(cfg : DictConfig) -> None:
     ref_motion_cfg.clip_num = 1
     ref_motion = RefMotionLoader(ref_motion_cfg)
     
-    #-) or gettting ref traj from a real-time motion capture system
 
     #2) build robot model
     asset = cfg.get("asset",None)

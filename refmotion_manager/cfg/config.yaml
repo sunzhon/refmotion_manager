@@ -1,9 +1,10 @@
-robot_type: nix1_v2_joint21
+robot_type: nix1
+robot_name: nix1_joint21
 asset:
   root: ./../../lumos_assets/
-  xml: ${robot_type}/mjcf/${robot_type}.xml
-  urdf: ${robot_type}/urdf/${robot_type}.urdf
+  xml: ${robot_type}/mjcf/${robot_name}.xml
+  urdf: ${robot_type}/urdf/${robot_name}.urdf
 
 dataset:
-  folder: /../../motions/${robot_type}/pkl
+  folder: /../../motions/${robot_name}/pkl
   file: Mma_Kick_with_lastframe_repeat48_fps30.pkl
