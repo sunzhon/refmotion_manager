@@ -394,10 +394,10 @@ def main(cfg : DictConfig) -> None:
     from refmotion_manager.tests.test_loader_cfg import ref_motion_cfg
     ref_motion_cfg.time_between_frames = 0.02
 
-    dataset = cfg.get("dataset",None)
-    motion_files = "./../"+os.path.join(dataset.folder, dataset.file)
+    dataset = cfg.get("dataset", None)
+    motion_files = f"./../{dataset.folder}/{dataset.file}"
     print(motion_files)
-    ref_motion_cfg.motion_files= glob.glob(motion_files)
+    ref_motion_cfg.motion_files= motion_files
     ref_motion_cfg.clip_num = 1
     ref_motion = RefMotionLoader(ref_motion_cfg)
 
