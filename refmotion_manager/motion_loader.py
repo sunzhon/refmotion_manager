@@ -574,31 +574,48 @@ class RefMotionLoader:
             An interpolation of the two frames.
 
         """
-        if "root_rot" not in self.trajectory_fields:
-            blend_fd = self._lerp(frame0, frame1, blend)
-        else:
-            # Define the field names for the dataset.
-            root_rot_index = [self.trajectory_fields.index("root_rot_" + key) for key in ["x", "y", "z", "w"]]
-            other_field_index = [
-                i for i in range(len(self.trajectory_fields)) if i not in root_rot_index
-            ]
+        # Define the field names for the dataset.
+        root_rot_index = [self.trajectory_fields.index("root_rot_" + key) for key in ["x", "y", "z", "w"]]
+        other_field_index = [
+            i for i in range(len(self.trajectory_fields)) if i not in root_rot_index
+        ]
+        
+        q0 = frame0[root_rot_index]
+        q1 = frame1[root_rot_index]
 
-            fd0 = frame0[root_rot_index]
-            fd1 = frame1[root_rot_index]
-            rot_blend_fd = transformations.quaternion_slerp(
-                fd0.cpu().numpy(), fd1.cpu().numpy(), blend
-            )
-            rot_blend_fd = motion_util.standardize_quaternion(rot_blend_fd)
+        # 1. normalize
+        q0 = q0 / torch.linalg.norm(q0)
+        q1 = q1 / torch.linalg.norm(q1)
+        
+        # 2. hemisphere alignment (最关键)
+        if torch.dot(q0, q1) < 0:
+            q1 = -q1
+        
+        # 3. SLERP (numpy or torch version)
+        rot_blend_fd = transformations.quaternion_slerp(
+            q0.cpu().numpy(),
+            q1.cpu().numpy(),
+            blend,
+        )
+        
+        rot_blend_fd = torch.tensor(
+            rot_blend_fd,
+            dtype=frame0.dtype,
+            device=frame0.device,
+        )
+        
+        # 4. renormalize (数值稳定)
+        rot_blend_fd = rot_blend_fd / torch.linalg.norm(rot_blend_fd)
 
-            other_blend_fd = self._lerp(
-                frame0[other_field_index], frame1[other_field_index], blend
-            )
+        # 5. other fields
+        other_blend_fd = self._lerp(
+            frame0[other_field_index], frame1[other_field_index], blend
+        )
 
-            blend_fd = frame0.clone()
-            blend_fd[root_rot_index] = rot_blend_fd
-            blend_fd[other_field_index] = other_blend_fd
+        blend_fd = frame0.clone()
+        blend_fd[root_rot_index] = rot_blend_fd
+        blend_fd[other_field_index] = other_blend_fd
 
-            # blend_fd = torch.cat((other_blend_fd, rot_blend_fd), dim=-1, dtype=torch.float32, device=self.device)
         return blend_fd
 
     def step(self):
