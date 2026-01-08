@@ -98,6 +98,7 @@ def main(cfg : DictConfig) -> None:
         cam = viewer.cam
         cam.distance = 4.0 ;cam.azimuth = 135; cam.elevation = -10; cam.lookat = [0,0,0]
         cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING;cam.trackbodyid=1;
+        viewer.opt.geomgroup[:] = [0, 1, 1, 1, 0, 0]
 
         # adding gemo to dislay key joint position
         for _ in range(20):
