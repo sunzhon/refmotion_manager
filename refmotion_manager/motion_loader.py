@@ -48,6 +48,20 @@ class RefMotionCfg:
     ref_length_s: float = 20.0
     frame_begin: int = 0
     frame_end: int | None = None
+    
+    # Adaptive sampling parameters
+    adaptive_sampling: bool = False
+    """Whether to enable adaptive sampling based on failure statistics."""
+    adaptive_bin_count: int | None = None
+    """Number of bins to divide the trajectory into for failure tracking. If None, auto-calculated."""
+    adaptive_kernel_size: int = 5
+    """Size of the smoothing kernel for failure probability distribution."""
+    adaptive_lambda: float = 0.8
+    """Decay factor for the smoothing kernel (controls how much to smooth across neighboring bins)."""
+    adaptive_uniform_ratio: float = 0.1
+    """Ratio of uniform sampling to add for exploration (0.0-1.0)."""
+    adaptive_alpha: float = 0.001
+    """Exponential moving average factor for updating failure counts (smaller = slower update)."""
     random_start: bool = False
     amp_obs_frame_num: int = 2
     specify_init_values: dict[str, float] | None = None
@@ -130,6 +144,9 @@ class RefMotionLoader:
 
         # Field information
         self.trajectory_fields = None
+        
+        # Adaptive sampling state (will be initialized after preloading)
+        self._adaptive_initialized = False
 
     def _load_trajectories(self) -> None:
         """Load and process all motion trajectories."""
@@ -433,6 +450,153 @@ class RefMotionLoader:
             low=0, high=max_start, size=(self.cfg.clip_num,), device=self.cfg.device
         ).requires_grad_(False)
         self.init_states = self.preloaded_s[self.start_idx][:, self.init_state_fields_index]
+        
+        # Initialize adaptive sampling if enabled
+        self._initialize_adaptive_sampling()
+
+    def _initialize_adaptive_sampling(self) -> None:
+        """Initialize adaptive sampling data structures."""
+        if not self.cfg.adaptive_sampling:
+            self._adaptive_initialized = False
+            return
+            
+        import math
+        
+        # Calculate number of bins if not specified
+        if self.cfg.adaptive_bin_count is None:
+            # Default: one bin per second of motion
+            self.adaptive_bin_count = max(10, int(self.clip_frame_num * self.cfg.time_between_frames))
+        else:
+            self.adaptive_bin_count = self.cfg.adaptive_bin_count
+        
+        # Initialize failure tracking tensors
+        self.bin_failed_count = torch.zeros(
+            self.adaptive_bin_count, dtype=torch.float32, device=self.cfg.device
+        )
+        self._current_bin_failed = torch.zeros(
+            self.adaptive_bin_count, dtype=torch.float32, device=self.cfg.device
+        )
+        
+        # Create smoothing kernel
+        kernel_values = [self.cfg.adaptive_lambda ** i for i in range(self.cfg.adaptive_kernel_size)]
+        self.adaptive_kernel = torch.tensor(kernel_values, device=self.cfg.device, dtype=torch.float32)
+        self.adaptive_kernel = self.adaptive_kernel / self.adaptive_kernel.sum()
+        
+        self._adaptive_initialized = True
+        logger.info(f"Adaptive sampling initialized with {self.adaptive_bin_count} bins")
+
+    def adaptive_sample(self, env_ids: torch.Tensor, terminated: torch.Tensor = None) -> None:
+        """
+        Perform adaptive sampling for specified environments.
+        
+        This method samples starting positions for trajectories based on historical failure rates.
+        Regions where the robot frequently fails will be sampled more often.
+        
+        Args:
+            env_ids: Tensor of environment indices to resample
+            terminated: Optional tensor indicating which environments terminated due to failure
+                       (used to update failure statistics)
+        """
+        import math
+        
+        if not self._adaptive_initialized or len(env_ids) == 0:
+            return
+            
+        # Update failure statistics if termination info provided
+        if terminated is not None and torch.any(terminated):
+            # Get current frame indices for failed environments
+            current_frame_idx = self.start_idx[env_ids] + self.frame_idx[env_ids]
+            
+            # Map frame index to bin index
+            bin_indices = torch.clamp(
+                (current_frame_idx * self.adaptive_bin_count) // max(self.preloaded_s.shape[0], 1),
+                0, self.adaptive_bin_count - 1
+            )
+            
+            # Count failures per bin (only for terminated envs)
+            fail_bins = bin_indices[terminated]
+            self._current_bin_failed[:] = torch.bincount(
+                fail_bins.long(), minlength=self.adaptive_bin_count
+            ).float()
+        
+        # Compute sampling probability distribution
+        sampling_probs = self.bin_failed_count + self.cfg.adaptive_uniform_ratio / float(self.adaptive_bin_count)
+        
+        # Apply smoothing kernel via 1D convolution
+        sampling_probs = torch.nn.functional.pad(
+            sampling_probs.unsqueeze(0).unsqueeze(0),
+            (0, self.cfg.adaptive_kernel_size - 1),
+            mode="replicate"
+        )
+        sampling_probs = torch.nn.functional.conv1d(
+            sampling_probs, self.adaptive_kernel.view(1, 1, -1)
+        ).view(-1)
+        
+        # Normalize to get probability distribution
+        sampling_probs = sampling_probs / (sampling_probs.sum() + 1e-8)
+        
+        # Sample bins according to probability distribution
+        num_samples = env_ids.shape[0] if env_ids.dim() > 0 else 1
+        sampled_bins = torch.multinomial(sampling_probs, num_samples, replacement=True)
+        
+        # Convert bin indices to frame indices (with random offset within bin)
+        frames_per_bin = self.preloaded_s.shape[0] / self.adaptive_bin_count
+        random_offsets = torch.rand(num_samples, device=self.cfg.device)
+        new_start_idx = ((sampled_bins.float() + random_offsets) * frames_per_bin).long()
+        
+        # Clamp to valid range
+        max_start = max(1, self.preloaded_s.shape[0] - self.clip_frame_num - 1)
+        new_start_idx = torch.clamp(new_start_idx, 0, max_start)
+        
+        # Update start indices
+        self.start_idx[env_ids] = new_start_idx
+        
+        # Log sampling metrics (optional, for debugging)
+        if hasattr(self, '_log_adaptive_metrics') and self._log_adaptive_metrics:
+            H = -(sampling_probs * (sampling_probs + 1e-12).log()).sum()
+            H_norm = H / math.log(self.adaptive_bin_count)
+            pmax, imax = sampling_probs.max(dim=0)
+            logger.debug(f"Adaptive sampling - Entropy: {H_norm:.3f}, Top bin: {imax.item()}, Top prob: {pmax:.3f}")
+
+    def update_adaptive_statistics(self) -> None:
+        """
+        Update the exponential moving average of failure counts.
+        Call this at the end of each step/episode to update statistics.
+        """
+        if not self._adaptive_initialized:
+            return
+            
+        # Exponential moving average update
+        self.bin_failed_count = (
+            self.cfg.adaptive_alpha * self._current_bin_failed + 
+            (1 - self.cfg.adaptive_alpha) * self.bin_failed_count
+        )
+        self._current_bin_failed.zero_()
+
+    def get_adaptive_sampling_metrics(self) -> Dict[str, float]:
+        """
+        Get metrics about the adaptive sampling distribution.
+        
+        Returns:
+            Dictionary containing sampling entropy, top bin probability, etc.
+        """
+        import math
+        
+        if not self._adaptive_initialized:
+            return {}
+            
+        sampling_probs = self.bin_failed_count + self.cfg.adaptive_uniform_ratio / float(self.adaptive_bin_count)
+        sampling_probs = sampling_probs / (sampling_probs.sum() + 1e-8)
+        
+        H = -(sampling_probs * (sampling_probs + 1e-12).log()).sum()
+        H_norm = H / math.log(self.adaptive_bin_count)
+        pmax, imax = sampling_probs.max(dim=0)
+        
+        return {
+            "adaptive_sampling_entropy": H_norm.item(),
+            "adaptive_sampling_top1_prob": pmax.item(),
+            "adaptive_sampling_top1_bin": imax.item() / self.adaptive_bin_count,
+        }
 
     def _log_initialization_summary(self) -> None:
         """Log summary information after initialization."""
@@ -675,37 +839,31 @@ class RefMotionLoader:
             return None
         return self.preloaded_s[self.next_frame_idx][:, self.expressive_goal_index]
 
-    def reset(self, env_ids: torch.Tensor = None):
-
+    def reset(self, env_ids: torch.Tensor = None, terminated: torch.Tensor = None):
+        """
+        Reset motion tracking for specified environments.
+        
+        Args:
+            env_ids: Tensor of environment indices to reset. If None, resets all environments.
+            terminated: Optional tensor indicating which environments terminated due to failure.
+                       Used for adaptive sampling to update failure statistics.
+        """
         if env_ids is None:
             self.frame_idx[:] = 0
-            ## weighted sampling of traj indices
-            # if not hasattr(self, "traj_weights"):
-            #    self.traj_weights = torch.ones(self.preloaded_s.shape[0], device=self.preloaded_s.device)
-            #
-            # probs = self.traj_weights / self.traj_weights.sum()
-            # self.clip_idxs[:] = torch.multinomial(
-            #    probs, num_samples=self.preloaded_s.shape[0], replacement=True
-            # )
+            # Update adaptive sampling statistics before resetting
+            if self._adaptive_initialized:
+                self.update_adaptive_statistics()
         else:
+            # Update failure statistics and perform adaptive sampling if enabled
+            if self._adaptive_initialized and terminated is not None:
+                # Record failures before resetting
+                self.adaptive_sample(env_ids, terminated)
+                
             self.frame_idx[env_ids] = 0
-            # NOTE, CHECKING THIS LATER
-            # try:
-            #    if env_ids.dtype == torch.bool:
-            #        num_ids = env_ids.sum().item()  # how many True entries
-            #    else:
-            #        num_ids = env_ids.shape[0]
-
-            #    self.start_idx[env_ids] = torch.randint(low=0, high=max_start + 1, size=(num_ids,), device=self.start_idx.device)
-            #    import pdb;pdb.set_trace()
-            # except RuntimeError as e:
-            #    import pdb;pdb.set_trace()
-            #
-            ## weighted sampling only for selected envs
-            # probs = self.traj_weights / self.traj_weights.sum()
-            # self.clip_idxs[env_ids] = torch.multinomial(
-            #    probs, num_samples=num_ids, replacement=True
-            # )
+            
+        # Update adaptive statistics at end of reset cycle
+        if self._adaptive_initialized:
+            self.update_adaptive_statistics()
 
     def sw_quat(self, frame_data):
         # switch root-rot quaternion from xyzw to wxyz
