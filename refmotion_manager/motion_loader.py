@@ -456,7 +456,7 @@ class RefMotionLoader:
 
     def _initialize_adaptive_sampling(self) -> None:
         """Initialize adaptive sampling data structures."""
-        if not self.cfg.adaptive_sampling:
+        if not getattr(self.cfg, "adaptive_sampling", False):
             self._adaptive_initialized = False
             return
             
