@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import joblib
 from pybullet_utils import transformations
+import re
 
 from .utils import motion_util
 from .utils.pose3d import QuaternionNormalize
@@ -356,6 +357,8 @@ class RefMotionLoader:
         self._setup_velocity_indices()
         self._setup_root_indices()
         self._setup_goal_indices()
+        # Setup per-body indices (rotations and angular velocities) if present
+        self._setup_body_indices()
         self._setup_style_fields()
 
         # Initialize sampling indices
@@ -437,6 +440,67 @@ class RefMotionLoader:
                 [self.trajectory_fields.index(key) for key in self.cfg.expressive_goal_fields]
             ).to(self.cfg.device)
 
+    def _setup_body_indices(self) -> None:
+        """Scan trajectory fields and build per-body rotation and angular-velocity indices.
+
+        Creates the following attributes:
+        - self.body_rot_index_xyzw: dict mapping body -> [idx_x, idx_y, idx_z, idx_w]
+        - self.body_rot_index_wxyz: dict mapping body -> [idx_w, idx_x, idx_y, idx_z]
+        - self.body_angvel_index: dict mapping body -> [idx_x, idx_y, idx_z]
+        - self.body_list: sorted list of body names for which indices were found
+        """
+        self.body_rot_index_xyzw = {}
+        self.body_rot_index_wxyz = {}
+        self.body_angvel_index = {}
+        self.body_list = []
+
+        if self.trajectory_fields is None:
+            return
+
+        # Patterns expect names like '<body>_rot_x_w' and '<body>_angvel_x_w'
+        rot_pattern = re.compile(r"(?P<body>.+)_rot_([xyzw])_w$")
+        angvel_pattern = re.compile(r"(?P<body>.+)_angvel_([xyz])_w$")
+
+        # Temporary storages
+        rot_comp = {}
+        angvel_comp = {}
+
+        for idx, name in enumerate(self.trajectory_fields):
+            m = rot_pattern.match(name)
+            if m:
+                body = m.group("body")
+                comp = name.split("_rot_")[1].split("_w")[0]  # 'x'/'y'/'z'/'w'
+                rot_comp.setdefault(body, {})[comp] = idx
+                continue
+
+            m = angvel_pattern.match(name)
+            if m:
+                body = m.group("body")
+                comp = name.split("_angvel_")[1].split("_w")[0]  # 'x'/'y'/'z'
+                angvel_comp.setdefault(body, {})[comp] = idx
+
+        # Build final mappings for bodies that have complete sets
+        all_bodies = set(list(rot_comp.keys()) + list(angvel_comp.keys()))
+
+        for body in sorted(all_bodies):
+            r = rot_comp.get(body, {})
+            a = angvel_comp.get(body, {})
+
+            # Build rot indices if all components present
+            if all(k in r for k in ["x", "y", "z", "w"]):
+                self.body_rot_index_xyzw[body] = [r["x"], r["y"], r["z"], r["w"]]
+                # reorder to w,x,y,z for convenience (matches root_quat_index convention)
+                self.body_rot_index_wxyz[body] = [r["w"], r["x"], r["y"], r["z"]]
+
+            # Build angvel indices if all components present
+            if all(k in a for k in ["x", "y", "z"]):
+                self.body_angvel_index[body] = [a["x"], a["y"], a["z"]]
+
+            if body in self.body_rot_index_xyzw or body in self.body_angvel_index:
+                self.body_list.append(body)
+
+        logger.info(f"Detected {len(self.body_list)} bodies with per-body fields: {self.body_list}")
+
     def _setup_style_fields(self) -> None:
         """Setup indices for style fields."""
         if self.cfg.style_fields:
@@ -515,9 +579,11 @@ class RefMotionLoader:
             
             # Count failures per bin (only for terminated envs)
             fail_bins = bin_indices[terminated]
-            self._current_bin_failed[:] = torch.bincount(
+            # Accumulate failures instead of overwriting
+            bin_counts = torch.bincount(
                 fail_bins.long(), minlength=self.adaptive_bin_count
             ).float()
+            self._current_bin_failed += bin_counts  # Accumulate instead of assign
         
         # Compute sampling probability distribution
         sampling_probs = self.bin_failed_count + self.cfg.adaptive_uniform_ratio / float(self.adaptive_bin_count)
