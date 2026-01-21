@@ -444,59 +444,101 @@ class RefMotionLoader:
         """Scan trajectory fields and build per-body rotation and angular-velocity indices.
 
         Creates the following attributes:
-        - self.body_rot_index_xyzw: dict mapping body -> [idx_x, idx_y, idx_z, idx_w]
-        - self.body_rot_index_wxyz: dict mapping body -> [idx_w, idx_x, idx_y, idx_z]
-        - self.body_angvel_index: dict mapping body -> [idx_x, idx_y, idx_z]
+        - self.body_rot_index_xyzw: dict mapping body -> [idx_x, idx_y, idx_z, idx_w] (world frame)
+        - self.body_rot_index_wxyz: dict mapping body -> [idx_w, idx_x, idx_y, idx_z] (world frame)
+        - self.body_angvel_index: dict mapping body -> [idx_x, idx_y, idx_z] (world frame)
+        - self.body_rot_index_xyzw_b: dict mapping body -> [idx_x, idx_y, idx_z, idx_w] (body frame)
+        - self.body_rot_index_wxyz_b: dict mapping body -> [idx_w, idx_x, idx_y, idx_z] (body frame)
+        - self.body_angvel_index_b: dict mapping body -> [idx_x, idx_y, idx_z] (body frame)
         - self.body_list: sorted list of body names for which indices were found
         """
         self.body_rot_index_xyzw = {}
         self.body_rot_index_wxyz = {}
         self.body_angvel_index = {}
+        self.body_rot_index_xyzw_b = {}
+        self.body_rot_index_wxyz_b = {}
+        self.body_angvel_index_b = {}
         self.body_list = []
 
         if self.trajectory_fields is None:
             return
 
-        # Patterns expect names like '<body>_rot_x_w' and '<body>_angvel_x_w'
-        rot_pattern = re.compile(r"(?P<body>.+)_rot_([xyzw])_w$")
-        angvel_pattern = re.compile(r"(?P<body>.+)_angvel_([xyz])_w$")
+        # Patterns expect names like '<body>_rot_x_w' and '<body>_angvel_x_w' for world frame
+        # and '<body>_rot_x_b' and '<body>_angvel_x_b' for body frame
+        rot_pattern_w = re.compile(r"(?P<body>.+)_rot_([xyzw])_w$")
+        angvel_pattern_w = re.compile(r"(?P<body>.+)_angvel_([xyz])_w$")
+        rot_pattern_b = re.compile(r"(?P<body>.+)_rot_([xyzw])_b$")
+        angvel_pattern_b = re.compile(r"(?P<body>.+)_angvel_([xyz])_b$")
 
         # Temporary storages
-        rot_comp = {}
-        angvel_comp = {}
+        rot_comp_w = {}
+        angvel_comp_w = {}
+        rot_comp_b = {}
+        angvel_comp_b = {}
 
         for idx, name in enumerate(self.trajectory_fields):
-            m = rot_pattern.match(name)
+            # World frame rotation
+            m = rot_pattern_w.match(name)
             if m:
                 body = m.group("body")
                 comp = name.split("_rot_")[1].split("_w")[0]  # 'x'/'y'/'z'/'w'
-                rot_comp.setdefault(body, {})[comp] = idx
+                rot_comp_w.setdefault(body, {})[comp] = idx
                 continue
 
-            m = angvel_pattern.match(name)
+            # World frame angular velocity
+            m = angvel_pattern_w.match(name)
             if m:
                 body = m.group("body")
                 comp = name.split("_angvel_")[1].split("_w")[0]  # 'x'/'y'/'z'
-                angvel_comp.setdefault(body, {})[comp] = idx
+                angvel_comp_w.setdefault(body, {})[comp] = idx
+                continue
+
+            # Body frame rotation
+            m = rot_pattern_b.match(name)
+            if m:
+                body = m.group("body")
+                comp = name.split("_rot_")[1].split("_b")[0]  # 'x'/'y'/'z'/'w'
+                rot_comp_b.setdefault(body, {})[comp] = idx
+                continue
+
+            # Body frame angular velocity
+            m = angvel_pattern_b.match(name)
+            if m:
+                body = m.group("body")
+                comp = name.split("_angvel_")[1].split("_b")[0]  # 'x'/'y'/'z'
+                angvel_comp_b.setdefault(body, {})[comp] = idx
 
         # Build final mappings for bodies that have complete sets
-        all_bodies = set(list(rot_comp.keys()) + list(angvel_comp.keys()))
+        all_bodies = set(list(rot_comp_w.keys()) + list(angvel_comp_w.keys()) + list(rot_comp_b.keys()) + list(angvel_comp_b.keys()))
 
         for body in sorted(all_bodies):
-            r = rot_comp.get(body, {})
-            a = angvel_comp.get(body, {})
+            r_w = rot_comp_w.get(body, {})
+            a_w = angvel_comp_w.get(body, {})
+            r_b = rot_comp_b.get(body, {})
+            a_b = angvel_comp_b.get(body, {})
 
-            # Build rot indices if all components present
-            if all(k in r for k in ["x", "y", "z", "w"]):
-                self.body_rot_index_xyzw[body] = [r["x"], r["y"], r["z"], r["w"]]
+            # Build world frame rot indices if all components present
+            if all(k in r_w for k in ["x", "y", "z", "w"]):
+                self.body_rot_index_xyzw[body] = [r_w["x"], r_w["y"], r_w["z"], r_w["w"]]
                 # reorder to w,x,y,z for convenience (matches root_quat_index convention)
-                self.body_rot_index_wxyz[body] = [r["w"], r["x"], r["y"], r["z"]]
+                self.body_rot_index_wxyz[body] = [r_w["w"], r_w["x"], r_w["y"], r_w["z"]]
 
-            # Build angvel indices if all components present
-            if all(k in a for k in ["x", "y", "z"]):
-                self.body_angvel_index[body] = [a["x"], a["y"], a["z"]]
+            # Build world frame angvel indices if all components present
+            if all(k in a_w for k in ["x", "y", "z"]):
+                self.body_angvel_index[body] = [a_w["x"], a_w["y"], a_w["z"]]
 
-            if body in self.body_rot_index_xyzw or body in self.body_angvel_index:
+            # Build body frame rot indices if all components present
+            if all(k in r_b for k in ["x", "y", "z", "w"]):
+                self.body_rot_index_xyzw_b[body] = [r_b["x"], r_b["y"], r_b["z"], r_b["w"]]
+                # reorder to w,x,y,z for convenience
+                self.body_rot_index_wxyz_b[body] = [r_b["w"], r_b["x"], r_b["y"], r_b["z"]]
+
+            # Build body frame angvel indices if all components present
+            if all(k in a_b for k in ["x", "y", "z"]):
+                self.body_angvel_index_b[body] = [a_b["x"], a_b["y"], a_b["z"]]
+
+            if (body in self.body_rot_index_xyzw or body in self.body_angvel_index or
+                body in self.body_rot_index_xyzw_b or body in self.body_angvel_index_b):
                 self.body_list.append(body)
 
         logger.info(f"Detected {len(self.body_list)} bodies with per-body fields: {self.body_list}")
