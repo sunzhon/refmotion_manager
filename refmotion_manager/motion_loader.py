@@ -1,4 +1,4 @@
-import glob
+`import glob
 import json
 import logging
 import numpy as np
@@ -231,6 +231,8 @@ class RefMotionLoader:
             for key, value in self.cfg.specify_init_values.items():
                 init_frame[self.trajectory_fields.index(key)] = value
 
+            init_frame = torch.Tensor(init_frame).to(self.cfg.device)
+            first_frame = torch.Tensor(first_frame).to(self.cfg.device)
             for idx in range(head_tail_frame_num):
                 blend = float(idx / head_tail_frame_num)
                 head_transition_frames.append(self.blend_frame_pose(init_frame, first_frame, blend))
@@ -246,6 +248,8 @@ class RefMotionLoader:
             for key, value in self.cfg.specify_final_values.items():
                 final_frame[self.trajectory_fields.index(key)] = value
 
+            last_frame = torch.Tensor(last_frame).to(self.cfg.device)
+            final_frame = torch.Tensor(final_frame).to(self.cfg.device)
             for idx in range(head_tail_frame_num):
                 blend = float(idx / head_tail_frame_num)
                 tail_transition_frames.append(self.blend_frame_pose(last_frame, final_frame, blend))
