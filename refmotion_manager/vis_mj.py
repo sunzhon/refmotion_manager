@@ -112,6 +112,7 @@ def main(cfg: DictConfig) -> None:
         cam.lookat = [0, 0, 0]
         cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
         cam.trackbodyid = 1
+        viewer.opt.geomgroup[:] = [0, 1, 1, 1, 0, 0]
 
         # adding gemo to display key joint position
         for _ in range(20):
