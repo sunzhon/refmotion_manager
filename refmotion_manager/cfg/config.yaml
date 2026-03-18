@@ -1,5 +1,5 @@
 robot_type: nix2
-robot_name: nix2_joint21
+robot_name: nix2_v0
 asset:
   root: ./../../lumos_assets/
   xml: ${robot_type}/mjcf/${robot_name}.xml
