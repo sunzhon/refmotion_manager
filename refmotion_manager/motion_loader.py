@@ -52,6 +52,9 @@ class RefMotionCfg:
     amp_obs_frame_num: int = 2
     specify_init_values: dict[str, float] | None = None
     specify_final_values: dict[str, float] | None = None
+    transition_time_s: float = 2.0
+    final_transition_start_before_end_s: float = 0.0
+    final_hold_time_s: float = 0.0
 
 
 class RefMotionLoader:
@@ -212,9 +215,9 @@ class RefMotionLoader:
         if not (self.cfg.specify_init_values or self.cfg.specify_final_values):
             return motion_data
 
-        head_tail_time_s = 2.0  # seconds
         frame_duration = float(motion_json["FrameDuration"])
-        head_tail_frame_num = int(head_tail_time_s / frame_duration)
+        transition_time_s = float(getattr(self.cfg, "transition_time_s", 2.0))
+        head_tail_frame_num = max(1, int(transition_time_s / frame_duration))
 
         # Create transition frames
         head_transition_frames = []
@@ -229,7 +232,8 @@ class RefMotionLoader:
 
             # Apply initial values
             for key, value in self.cfg.specify_init_values.items():
-                init_frame[self.trajectory_fields.index(key)] = value
+                if key in self.trajectory_fields:
+                    init_frame[self.trajectory_fields.index(key)] = value
 
             init_frame = torch.Tensor(init_frame).to(self.cfg.device)
             first_frame = torch.Tensor(first_frame).to(self.cfg.device)
@@ -241,29 +245,46 @@ class RefMotionLoader:
         if self.cfg.specify_final_values is not None:
             logger.info("Adding transition frames for specified final values")
 
+            final_start_before_end_s = float(getattr(self.cfg, "final_transition_start_before_end_s", 0.0))
+            if final_start_before_end_s > 0.0:
+                trim_frame_num = int(final_start_before_end_s / frame_duration)
+                trim_frame_num = min(trim_frame_num, max(0, motion_data.shape[0] - 2))
+                if trim_frame_num > 0:
+                    motion_data = motion_data[:-trim_frame_num, :]
+                    logger.info(
+                        f"Trimmed {trim_frame_num} frames before final transition. "
+                        f"Transition starts from frame {motion_data.shape[0] - 1}."
+                    )
+
             last_frame = motion_data[-1, :].copy()
             final_frame = last_frame.copy()
 
             # Apply final values
             for key, value in self.cfg.specify_final_values.items():
-                final_frame[self.trajectory_fields.index(key)] = value
+                if key in self.trajectory_fields:
+                    final_frame[self.trajectory_fields.index(key)] = value
 
             last_frame = torch.Tensor(last_frame).to(self.cfg.device)
             final_frame = torch.Tensor(final_frame).to(self.cfg.device)
             for idx in range(head_tail_frame_num):
-                blend = float(idx / head_tail_frame_num)
+                alpha = float((idx + 1) / head_tail_frame_num)
+                blend = alpha * alpha * (3.0 - 2.0 * alpha)
                 tail_transition_frames.append(self.blend_frame_pose(last_frame, final_frame, blend))
+            final_hold_time_s = float(getattr(self.cfg, "final_hold_time_s", self.cfg.time_between_frames * 8))
+            final_hold_frame_num = max(1, int(np.ceil(final_hold_time_s / frame_duration)))
+            for _ in range(final_hold_frame_num):
+                tail_transition_frames.append(final_frame.clone())
 
         # Combine all frames (with safety checks)
         frames_to_stack = []
 
         if head_transition_frames:
-            frames_to_stack.append(np.array(head_transition_frames))
+            frames_to_stack.append(torch.stack(head_transition_frames).detach().cpu().numpy())
 
         frames_to_stack.append(motion_data)
 
         if tail_transition_frames:
-            frames_to_stack.append(np.array(tail_transition_frames))
+            frames_to_stack.append(torch.stack(tail_transition_frames).detach().cpu().numpy())
 
         enhanced_data = np.vstack(frames_to_stack)
 
@@ -298,11 +319,17 @@ class RefMotionLoader:
 
         # Calculate reference length
         if self.cfg.ref_length_s is None:
-            self.cfg.ref_length_s = float(sum(self.trajectory_durations) - 3 * self.cfg.time_between_frames)
+            if self.cfg.specify_final_values is not None:
+                self.cfg.ref_length_s = float(sum(self.trajectory_durations))
+            else:
+                self.cfg.ref_length_s = float(sum(self.trajectory_durations) - 3 * self.cfg.time_between_frames)
 
         self.cfg.ref_length_s = min(float(sum(self.trajectory_durations)), self.cfg.ref_length_s)
 
-        self.clip_frame_num = int(self.cfg.ref_length_s / self.cfg.time_between_frames)
+        if self.cfg.specify_final_values is not None:
+            self.clip_frame_num = int(np.ceil(self.cfg.ref_length_s / self.cfg.time_between_frames)) + 1
+        else:
+            self.clip_frame_num = int(self.cfg.ref_length_s / self.cfg.time_between_frames)
         logger.warn("Will depression augment_frame_num in the future, please use clip_frame_num")
         self.augment_frame_num = self.clip_frame_num
 
@@ -497,7 +524,10 @@ class RefMotionLoader:
             )
 
         if size == None:
-            size = int(max_safe_time / self.cfg.time_between_frames)  # max size of the traj_idx
+            if self.cfg.specify_final_values is not None:
+                size = int(np.ceil(max_safe_time / self.cfg.time_between_frames)) + 1
+            else:
+                size = int(max_safe_time / self.cfg.time_between_frames)  # max size of the traj_idx
         if size <= 0:
             raise ValueError(f"Sample size must be positive, got {size}")
 
@@ -593,11 +623,12 @@ class RefMotionLoader:
         """Generates a batch of AMP transitions."""
         # Define trajectory indices and frame positions
         self.abs_frame_idx = self.start_idx + self.frame_idx
+        max_frame_idx = self.preloaded_s.shape[0] - 1
         # I) AMP observation
         # try:
         if self.cfg.style_fields:
             amp_seq = [
-                self.preloaded_s[self.abs_frame_idx + i, :][:, self.style_field_index]
+                self.preloaded_s[torch.clamp(self.abs_frame_idx + i, max=max_frame_idx), :][:, self.style_field_index]
                 for i in range(self.cfg.amp_obs_frame_num)
             ]
             # for the first step, the amp_ref, its current states and next states should be same
@@ -607,7 +638,7 @@ class RefMotionLoader:
             self.amp_expert = None
 
         # II) Goal (next frame data)
-        self.next_frame_idx = self.abs_frame_idx + 1
+        self.next_frame_idx = torch.clamp(self.abs_frame_idx + 1, max=max_frame_idx)
 
         # Increment frame counter
         self.frame_idx += 1
