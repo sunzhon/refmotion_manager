@@ -57,9 +57,14 @@ def main(cfg: DictConfig) -> None:
     from refmotion_manager.tests.test_loader_cfg import ref_motion_cfg
 
     ref_motion_cfg.time_between_frames = 0.008
+    ref_motion_cfg.clip_num = 1
+    ref_motion_cfg.trajectory_num = 1
 
     dataset = cfg.get("dataset")
-    motion_files = "./" + os.path.join(dataset.folder, dataset.file)
+    motion_file = dataset.file
+    if not motion_file.endswith(".pkl"):
+        motion_file = f"{motion_file}.pkl"
+    motion_files = "./" + os.path.join(dataset.folder, motion_file)
     logger.info(f"motion file is {motion_files}")
     ref_motion_cfg.motion_files = motion_files
     ref_motion_cfg.device = "cpu"
