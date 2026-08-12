@@ -341,6 +341,12 @@ class RefMotionLoader:
             self.cfg.clip_num = self.cfg.trajectory_num
             logger.warn("Depression trajectory_num in the future, please use clip_num")
 
+        if self.trajectory_num == 0:
+            raise RuntimeError(
+                "No motion trajectories were loaded. Please check that motion_files path is correct "
+                f"and files exist. motion_files='{self.cfg.motion_files}'"
+            )
+
         logger.info(f"Preloading {self.cfg.clip_num} trajectories with {self.clip_frame_num} frames each")
 
         # Fill preloaded tensor

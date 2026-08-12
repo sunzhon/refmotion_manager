@@ -64,7 +64,9 @@ def main(cfg: DictConfig) -> None:
     motion_file = dataset.file
     if not motion_file.endswith(".pkl"):
         motion_file = f"{motion_file}.pkl"
-    motion_files = "./" + os.path.join(dataset.folder, motion_file)
+    # Resolve relative path from original cwd, since Hydra changes working directory
+    motion_files = os.path.join(hydra.utils.get_original_cwd(), dataset.folder.strip("/"), motion_file)
+    motion_files = os.path.abspath(motion_files)
     logger.info(f"motion file is {motion_files}")
     ref_motion_cfg.motion_files = motion_files
     ref_motion_cfg.device = "cpu"
